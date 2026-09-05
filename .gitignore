@@ -38,3 +38,6 @@ dev/**/*.log
 dev/**/*.bak
 dev/**/*.png
 dev/**/*.jpg
+
+# 安装包产物(可再生, 不入库; 配方 .iss 保留入库)
+/install/*.exe

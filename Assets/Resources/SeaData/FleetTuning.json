@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "fleetMaxShips": 5,
+  "crew": {
+    "recruitCostBase": 8,
+    "sailorSalaryPerSettlement": 8,
+    "moraleMax": 100
+  },
+  "provision": {
+    "food": { "unitWeight": 0.03, "price": 0.5, "perCrewPerDay": 1.0 },
+    "water": { "unitWeight": 0.02, "price": 0.2, "perCrewPerDay": 1.0 },
+    "tea": { "unitWeight": 0.01, "price": 1.0, "perCrewPerDay": 1.0 }
+  },
+  "refit": {
+    "kinds": [
+      { "kind": "capacity", "costMinPct": 0.15, "costMaxPct": 0.3, "effectMin": 0.1, "effectMax": 0.25 },
+      { "kind": "fire", "costMinPct": 0.15, "costMaxPct": 0.3, "effectMin": 0.1, "effectMax": 0.25 },
+      { "kind": "armor", "costMinPct": 0.15, "costMaxPct": 0.3, "effectMin": 0.1, "effectMax": 0.25 },
+      { "kind": "speed", "costMinPct": 0.15, "costMaxPct": 0.3, "effectMin": 0.5, "effectMax": 1.5 }
+    ]
+  },
+  "pirate": {
+    "dangerByArea": [
+      { "areaId": "northSea", "danger": 0.3 },
+      { "areaId": "med", "danger": 0.55 },
+      { "areaId": "westAfrica", "danger": 0.7 },
+      { "areaId": "eastAfrica", "danger": 0.4 },
+      { "areaId": "india", "danger": 0.5 },
+      { "areaId": "seAsia", "danger": 0.8 },
+      { "areaId": "eastAsia", "danger": 0.6 },
+      { "areaId": "newWorld", "danger": 0.75 }
+    ],
+    "pursuitSpeedFactor": 1.15,
+    "ransomMinPct": 0.05,
+    "ransomMaxPct": 0.15,
+    "cargoLossLosePct": 0.15,
+    "attackWinAnchors": [
+      { "ratio": 0.5, "chance": 0.05 },
+      { "ratio": 1.0, "chance": 0.5 },
+      { "ratio": 1.5, "chance": 0.9 }
+    ],
+    "defenseWinAnchors": [
+      { "ratio": 0.5, "chance": 0.1 },
+      { "ratio": 1.0, "chance": 0.5 },
+      { "ratio": 1.6, "chance": 0.95 }
+    ]
+  }
+}

@@ -1,0 +1,146 @@
+[
+  {
+    "id": "lisbon_king_gold",
+    "name": "里斯本王室大宗购金",
+    "desc": "伊比利亚王室为备战而四处搜购黄金，地中海与北海的黄金行情一路上扬。",
+    "telegraph": true,
+    "scope": { "areas": ["med", "northSea"], "ports": [], "goods": ["gold"], "needClasses": [] },
+    "effect": { "role": "importer", "eqMul": 1.7, "refillMul": 1.0, "block": false },
+    "schedule": { "mode": "once", "dayOffset": 60, "duration": 45 }
+  },
+  {
+    "id": "northsea_herring_harvest",
+    "name": "北海鲱鱼大丰收",
+    "desc": "秋季鲱鱼洄游丰收，腌制不及，北欧咸鱼跌价——正是囤货的好时机。",
+    "telegraph": false,
+    "scope": { "areas": ["northSea"], "ports": [], "goods": ["saltedFish"], "needClasses": [] },
+    "effect": { "role": "producer", "eqMul": 0.62, "refillMul": 1.0, "block": false },
+    "schedule": { "mode": "yearly", "monthStart": 8, "duration": 40 }
+  },
+  {
+    "id": "mocha_new_bean",
+    "name": "摩卡咖啡新豆上市",
+    "desc": "也门新咖啡豆集中到港，摩卡一年里最便宜的进贷窗口。",
+    "telegraph": false,
+    "scope": { "areas": ["eastAfrica"], "ports": [], "goods": ["coffee"], "needClasses": [] },
+    "effect": { "role": "producer", "eqMul": 0.62, "refillMul": 1.0, "block": false },
+    "schedule": { "mode": "yearly", "monthStart": 11, "duration": 30 }
+  },
+  {
+    "id": "redsea_raiders",
+    "name": "红海商路遭袭",
+    "desc": "海盗袭扰红海-印度洋航路，咖啡与乳香断供，香价如金。",
+    "telegraph": true,
+    "scope": { "areas": ["eastAfrica"], "ports": [], "goods": ["coffee", "frankincense"], "needClasses": [] },
+    "effect": { "role": "producer", "eqMul": 1.8, "refillMul": 0.25, "block": false },
+    "schedule": { "mode": "period", "firstDay": 300, "periodDays": 720, "duration": 60 }
+  },
+  {
+    "id": "spice_isles_typhoon",
+    "name": "香料群岛台风毁林",
+    "desc": "强台风横扫马鲁古，丁香与肉豆蔻树倒伏，香料将贵一整季。",
+    "telegraph": true,
+    "scope": { "areas": ["seAsia"], "ports": [], "goods": ["cloves", "nutmeg", "sandalwood"], "needClasses": [] },
+    "effect": { "role": "producer", "eqMul": 1.9, "refillMul": 0.2, "block": false },
+    "schedule": { "mode": "period", "firstDay": 520, "periodDays": 900, "duration": 75 }
+  },
+  {
+    "id": "manila_galleon_arrival",
+    "name": "马尼拉大帆船入港",
+    "desc": "自阿卡普尔科东来的大帆船运抵满舱白银，马尼拉白银贱价求售。",
+    "telegraph": true,
+    "scope": { "areas": [], "ports": ["manila"], "goods": ["silver"], "needClasses": [] },
+    "effect": { "role": "producer", "eqMul": 0.6, "refillMul": 1.0, "block": false },
+    "schedule": { "mode": "yearly", "monthStart": 5, "duration": 25 }
+  },
+  {
+    "id": "silver_route_cut",
+    "name": "吕宋台风季·银路中断",
+    "desc": "台风季大帆船停航，东亚与东南亚白银告急，价格高企。",
+    "telegraph": true,
+    "scope": { "areas": ["eastAsia", "seAsia"], "ports": [], "goods": ["silver"], "needClasses": [] },
+    "effect": { "role": "importer", "eqMul": 1.7, "refillMul": 1.0, "block": false },
+    "schedule": { "mode": "yearly", "monthStart": 7, "duration": 70 }
+  },
+  {
+    "id": "venice_plague",
+    "name": "威尼斯大瘟疫",
+    "desc": "鼠疫封锁威尼斯，商栈闭门，玻璃器皿断货且市井萧条，贸易暂停。",
+    "telegraph": true,
+    "scope": { "areas": [], "ports": ["venice"], "goods": [], "needClasses": [] },
+    "effect": { "role": "", "eqMul": 1.4, "refillMul": 0.1, "block": true },
+    "schedule": { "mode": "once", "dayOffset": 730, "duration": 120 }
+  },
+  {
+    "id": "seville_fleet_late",
+    "name": "塞维利亚宝藏船队迟到",
+    "desc": "迟迟等不到船队的塞维利亚水手们荷包鼓胀，酒与珍品被抢购一空。",
+    "telegraph": false,
+    "scope": { "areas": [], "ports": ["seville"], "goods": [], "needClasses": ["indulgence", "luxury"] },
+    "effect": { "role": "importer", "eqMul": 1.6, "refillMul": 1.0, "block": false },
+    "schedule": { "mode": "period", "firstDay": 880, "periodDays": 900, "duration": 60 }
+  },
+  {
+    "id": "hamburg_winter_feast",
+    "name": "汉堡冬季节庆",
+    "desc": "汉萨商人冬日豪饮狂欢，嗜好品需求攀升。",
+    "telegraph": false,
+    "scope": { "areas": [], "ports": ["hamburg"], "goods": [], "needClasses": ["indulgence"] },
+    "effect": { "role": "importer", "eqMul": 1.5, "refillMul": 1.0, "block": false },
+    "schedule": { "mode": "yearly", "monthStart": 12, "duration": 30 }
+  },
+  {
+    "id": "caribbean_hurricane",
+    "name": "加勒比飓风毁蔗田",
+    "desc": "飓风横扫蔗田，新大陆砂糖与烟草减产，价格将连涨数月。",
+    "telegraph": true,
+    "scope": { "areas": ["newWorld"], "ports": [], "goods": ["sugar", "tobacco"], "needClasses": [] },
+    "effect": { "role": "producer", "eqMul": 1.8, "refillMul": 0.3, "block": false },
+    "schedule": { "mode": "period", "firstDay": 1100, "periodDays": 780, "duration": 80 }
+  },
+  {
+    "id": "china_sea_ban",
+    "name": "海禁收紧·洋货难求",
+    "desc": "沿海海禁加重，丝绸瓷器茶叶出口受阻，在港洋商争相抬价抢货。",
+    "telegraph": true,
+    "scope": { "areas": [], "ports": ["quanzhou", "guangzhou", "ningbo"], "goods": ["ceramics", "silk", "tea"], "needClasses": [] },
+    "effect": { "role": "producer", "eqMul": 1.55, "refillMul": 0.5, "block": false },
+    "schedule": { "mode": "period", "firstDay": 1250, "periodDays": 1000, "duration": 100 }
+  },
+  {
+    "id": "goa_pepper_fleet_storm",
+    "name": "果阿胡椒船队遇风暴",
+    "desc": "运胡椒的船队在风暴中沉没大半，胡椒产地库存告急、欧洲行情看涨。",
+    "telegraph": true,
+    "scope": { "areas": [], "ports": ["goa", "calicut"], "goods": ["pepper"], "needClasses": [] },
+    "effect": { "role": "producer", "eqMul": 1.8, "refillMul": 0.2, "block": false },
+    "schedule": { "mode": "period", "firstDay": 1400, "periodDays": 900, "duration": 70 }
+  },
+  {
+    "id": "nagasaki_trade_edict",
+    "name": "长崎开市·唐物狂热",
+    "desc": "幕府颁布贸易许可，日本上下渴求丝绸瓷器人参，长崎需求暴增。",
+    "telegraph": true,
+    "scope": { "areas": [], "ports": ["nagasaki"], "goods": ["silk", "ceramics", "ginseng"], "needClasses": [] },
+    "effect": { "role": "importer", "eqMul": 1.8, "refillMul": 1.0, "block": false },
+    "schedule": { "mode": "once", "dayOffset": 1550, "duration": 400 }
+  },
+  {
+    "id": "amber_beach_storm",
+    "name": "波罗的海琥珀冲滩",
+    "desc": "风暴将波罗的海底千年琥珀冲上滩涂，汉堡琥珀量大价贱。",
+    "telegraph": false,
+    "scope": { "areas": [], "ports": ["hamburg"], "goods": ["amber"], "needClasses": [] },
+    "effect": { "role": "producer", "eqMul": 0.6, "refillMul": 1.0, "block": false },
+    "schedule": { "mode": "period", "firstDay": 650, "periodDays": 700, "duration": 30 }
+  },
+  {
+    "id": "carib_pirates",
+    "name": "加勒比海盗猖獗",
+    "desc": "海盗横行加勒比，商船绕行、物价紊乱，新大陆贸易风险与利润齐升。",
+    "telegraph": true,
+    "scope": { "areas": ["newWorld"], "ports": [], "goods": [], "needClasses": [] },
+    "effect": { "role": "", "eqMul": 1.35, "refillMul": 0.5, "block": false },
+    "schedule": { "mode": "period", "firstDay": 1700, "periodDays": 700, "duration": 60 }
+  }
+]

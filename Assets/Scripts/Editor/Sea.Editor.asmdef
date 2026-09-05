@@ -1,0 +1,19 @@
+{
+    "name": "Sea.Editor",
+    "rootNamespace": "Sea",
+    "references": [
+        "Sea.Core",
+        "Sea.Runtime"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

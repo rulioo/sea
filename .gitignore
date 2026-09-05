@@ -1,0 +1,40 @@
+# Unity 生成物
+[Ll]ibrary/
+[Tt]emp/
+[Oo]bj/
+[Bb]uild/
+[Bb]uilds/
+[Ll]ogs/
+[Uu]ser[Ss]ettings/
+[Mm]emoryCaptures/
+[Rr]ecordings/
+
+# IDE
+.vs/
+.idea/
+*.csproj.user
+*.user
+*.pidb
+*.booproj
+*.svd
+*.userprefs
+
+# 本机临时
+*.tmp
+/unity_compile.log
+
+# dev/ 下 dotnet 工程的构建产物
+dev/*/bin/
+dev/*/obj/
+
+# 工程根目录杂散生成物(回归临时日志 / 海图烘焙预览, 均可再生)
+/compile1.log
+/compile2.log
+/map_preview.png
+/map_preview_small.png
+
+# dev/ 下的调试截图与旧档备份(不入库)
+dev/**/*.log
+dev/**/*.bak
+dev/**/*.png
+dev/**/*.jpg

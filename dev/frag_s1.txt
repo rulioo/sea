@@ -1,0 +1,11 @@
+        // =============================================================
+        // 情报站(玩家改版): 《贸易日报》(每日一刊·报纸, 正文快照进"我的订阅")
+        //   与《全球商情报》(月订 · 按地区"一张表"观行情, 含近期走势)。
+        //   买下的刊物都留进 IntelArchive 随存读档 → 情报站里随时翻旧刊。
+        //   报价取"发刊那一刻", 有实效 —— 纸面仅供参考, 明日请早。
+        // =============================================================
+        public const int IntelPaperCost = 100;     // 《贸易日报》· 每期
+        public const int IntelReportCost = 200;    // 《全球商情报》· 每月
+        public const string IntelPaperName = "贸易日报";     // 旧名《全球商报》
+        public const string IntelReportName = "全球商情报";  // 旧名《全球分析报》
+        public const string IntelBlockSep = "\x02";          // 报纸正文"块"分隔(存储/分页共用)

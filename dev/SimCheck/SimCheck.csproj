@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>SimCheck</AssemblyName>
+    <RootNamespace>Sea.SimCheck</RootNamespace>
+    <LangVersion>latest</LangVersion>
+  </PropertyGroup>
+
+  <!-- 直接编译纯 C# 经济核心, 保证与 Unity 同一份代码 -->
+  <ItemGroup>
+    <Compile Include="..\..\Assets\Scripts\Sea.Core\*.cs" />
+  </ItemGroup>
+
+  <!-- 把数据 JSON 拷到输出, 供运行时加载 (数据与 Unity 共用同一份, 在 Resources 下) -->
+  <ItemGroup>
+    <None Include="..\..\Assets\Resources\SeaData\*.json"
+          CopyToOutputDirectory="PreserveNewest"
+          Link="Data\%(Filename)%(Extension)" />
+  </ItemGroup>
+
+</Project>

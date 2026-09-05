@@ -1,0 +1,633 @@
+        // =============================================================
+        // 情报站 · 质感「羊皮海图」: 整窗老羊皮纸 + 赭墨正文 + 墨绿刊头/表头,
+        //   航海红(涨/封蜡) × 常绿(跌/产地), 青铜钮、红蜡封条 —— 一块绘图房案。
+        //   大厅(贸易日报 / 全球商情报 / 我的订阅) / 报纸翻页 / 表格 / 封面书架。
+        //   每份刊物进 play.IntelArchive(随存读档); 日报存正文快照, 商情报留订阅记录、
+        //   阅读时按最新行情重绘 → 我的订阅即历史卷宗抽屉。
+        // =============================================================
+        static readonly Color
+            P_parch = new Color(0.855f, 0.760f, 0.575f, 1f),   // 窗/桌面 羊皮纸
+            P_sheet = new Color(0.93f, 0.860f, 0.690f, 1f),    // 纸页/服务卡(亮一档)
+            P_sheetD = new Color(0.82f, 0.720f, 0.520f, 1f),   // 表带/选中(暗一档)
+            P_ink   = new Color(0.235f, 0.170f, 0.090f, 1f),   // 正文墨
+            P_soft  = new Color(0.450f, 0.360f, 0.200f, 1f),   // 注文/次要
+            P_navy  = new Color(0.100f, 0.290f, 0.350f, 1f),   // 墨绿: 刊头/表头
+            P_rust  = new Color(0.600f, 0.240f, 0.130f, 1f),   // 航海红: 涨/重点/封蜡
+            P_moss  = new Color(0.220f, 0.450f, 0.300f, 1f),   // 常绿: 跌/产地
+            P_gold  = new Color(0.580f, 0.410f, 0.100f, 1f),   // 报价强调(深金)
+            P_bronze = new Color(0.400f, 0.270f, 0.140f, 1f),  // 按钮青铜
+            P_btnTx = new Color(0.970f, 0.930f, 0.800f, 1f),   // 钮上米字
+            P_rule  = new Color(0.520f, 0.400f, 0.190f, 1f);   // 细线
+        static readonly Color
+            P_coverNavy  = new Color(0.100f, 0.280f, 0.340f, 1f),  // 商情报封面
+            P_coverOlive = new Color(0.300f, 0.370f, 0.200f, 1f),  // 日报封面(单号)
+            P_coverWine  = new Color(0.520f, 0.180f, 0.120f, 1f);  // 日报封面(双号)
+        List<SeaArea> _rptAreas = new List<SeaArea>();   // 航区顺序(按港口首现, dict 转序)
+        static readonly float[] RptW = { 150f, 150f, 80f, 50f, 150f, 80f, 50f, 270f };  // 商情报列宽(合计 980)
+        static readonly string[] RptHd = { "货物", "最低进价产地", "供价", "走势", "最高求价销地", "求价", "走势", "单件毛利" };
+        static readonly TextAnchor[] RptAl = {
+            TextAnchor.MiddleLeft, TextAnchor.MiddleLeft, TextAnchor.MiddleRight, TextAnchor.MiddleCenter,
+            TextAnchor.MiddleLeft, TextAnchor.MiddleRight, TextAnchor.MiddleCenter, TextAnchor.MiddleRight };
+
+        List<SeaArea> AreaOrder()
+        {
+            var list = new List<SeaArea>();
+            if (play == null || play.world == null) return list;
+            foreach (var p in play.world.Ports)
+                if (p.Area != null && !list.Contains(p.Area)) list.Add(p.Area);
+            return list;
+        }
+
+        void BuildIntel(Transform root)
+        {
+            _newsGo = Panel("newsOverlay", root, new Color(0f, 0f, 0f, 0.52f));
+            RootRect(Rt(_newsGo));
+            var win = Panel("win", _newsGo.transform, P_parch);
+            RectAt(Rt(win), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f),
+                new Vector2(0f, 4f), new Vector2(1040f, 600f));
+            // 顶上一条红蜡封条 + 墨绿刊名
+            var seal = Panel("seal", win.transform, P_rust);
+            RectAt(Rt(seal), new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(0.5f, 1f),
+                new Vector2(0f, -1f), new Vector2(0f, 4f));
+            var cap = AddText(win.transform, "情报站 · 绘图房的消息案", 18, P_navy, TextAnchor.UpperLeft);
+            RectAt(Rt(cap.gameObject), new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(0f, 1f),
+                new Vector2(18f, -12f), new Vector2(660f, 28f));
+            var close = MakeBtn(win.transform, "close", "✕", 15, P_bronze, P_btnTx);
+            RectAt(Rt(close.gameObject), new Vector2(1f, 1f), new Vector2(1f, 1f), new Vector2(1f, 1f),
+                new Vector2(-14f, -8f), new Vector2(42f, 38f));
+            close.onClick.AddListener(() => _newsOpen = false);
+
+            _newsHome = NewsPage("home", win.transform);
+            _newsPaper = NewsPage("paper", win.transform);
+            _newsReport = NewsPage("report", win.transform);
+            _newsSubs = NewsPage("subs", win.transform);
+            BuildNewsHome(_newsHome.transform);
+            BuildNewsPaper(_newsPaper.transform);
+            BuildNewsReport(_newsReport.transform);
+            BuildNewsSubs(_newsSubs.transform);
+            ApplyNewsPage();
+            _newsGo.SetActive(false);
+        }
+
+        static GameObject NewsPage(string n, Transform win)
+        {
+            var p = new GameObject("pg_" + n, typeof(RectTransform));
+            p.transform.SetParent(win, false);
+            var r = (RectTransform)p.transform;
+            r.anchorMin = new Vector2(0f, 0f); r.anchorMax = new Vector2(1f, 1f);
+            r.offsetMin = new Vector2(16f, 12f); r.offsetMax = new Vector2(-16f, -50f);
+            return p;
+        }
+
+        void ApplyNewsPage()
+        {
+            bool h = _newsPage == "home", p = _newsPage == "paper",
+                  r = _newsPage == "report", s = _newsPage == "subs";
+            if (_newsHome != null) _newsHome.SetActive(h);
+            if (_newsPaper != null) _newsPaper.SetActive(p);
+            if (_newsReport != null) _newsReport.SetActive(r);
+            if (_newsSubs != null) _newsSubs.SetActive(s);
+        }
+
+        static void BtnText(Button b, string s)
+        {
+            if (b == null) return;
+            var t = b.GetComponentInChildren<Text>();
+            if (t != null) t.text = s;
+        }
+        static void ClearKids(Transform t)
+        {
+            if (t == null) return;
+            for (int i = t.childCount - 1; i >= 0; i--)
+                UnityEngine.Object.Destroy(t.GetChild(i).gameObject);
+        }
+
+        // ---------------- 大厅: 三份服务(像卷宗抽屉上叠的纸页) ----------------
+        void ShowNewsHome()
+        {
+            _newsPage = "home";
+            ApplyNewsPage();
+            RefreshNewsHomeButtons();
+        }
+        void RefreshNewsHomeButtons()
+        {
+            if (play == null || _newsBuyBtn == null) return;
+            bool ownP = play.IntelPaperOwnedToday;
+            bool ownR = play.IntelReportMonthOwned;
+            int cnt = play.IntelArchiveCount;
+            long gold = play.fleet != null ? play.fleet.Gold : 0;
+            BtnText(_newsBuyBtn, ownP
+                ? "翻阅今日《" + SeaPlay.IntelPaperName + "》\n(今日已购)"
+                : "买下今日《" + SeaPlay.IntelPaperName + "》\n" + SeaPlay.IntelPaperCost + " 金");
+            BtnText(_newsRptBtn, ownR
+                ? "查看本月《" + SeaPlay.IntelReportName + "》\n(本月已订)"
+                : "订阅本月《" + SeaPlay.IntelReportName + "》\n" + SeaPlay.IntelReportCost + " 金");
+            BtnText(_newsSubsBtn, cnt > 0
+                ? "📚 我的订阅\n已收 " + cnt + " 卷 · 拆封 ▸"
+                : "📚 我的订阅\n卷宗还空着");
+            _newsBuyBtn.interactable = ownP || gold >= SeaPlay.IntelPaperCost;
+            _newsRptBtn.interactable = ownR || gold >= SeaPlay.IntelReportCost;
+            _newsSubsBtn.interactable = true;
+        }
+
+        void BuildNewsHome(Transform home)
+        {
+            float rowH = 152f, gap = 10f;
+            BuildServiceRow(home, 8f, rowH,
+                "《 贸 易 日 报 》 · 每日一刊",
+                "全海最贱的进价在哪、最抢手的货该往哪卖 —— 一版说清, 上岸随手捎一份。\n"
+                + "· 各港 特产供货/缺货求购 + 进价·存量 + 求价·约可收量\n"
+                + "· 晨报速递: 抄底坐标 / 出手坐标 / 单件毛利榜\n"
+                + "<color=#9E4A24>刊价 " + SeaPlay.IntelPaperCost + " 金 · 明日出新刊</color> · 纸面只反映付印那刻的行情",
+                ref _newsBuyBtn);
+            BuildServiceRow(home, 8f + rowH + gap, rowH,
+                "《 全 球 商 情 报 》 · 按月订阅",
+                "一个航区一张表: 在产/在求的货横着排开, 供价到求价一眼看穿。\n"
+                + "· 各货: 最低进价产地 → 最高求价销地 → 单件毛利\n"
+                + "· 涨跌箭头 = 相对约 7 天前的行情走向\n"
+                + "<color=#9E4A24>月订 " + SeaPlay.IntelReportCost + " 金</color> · 表格随最新行情重绘",
+                ref _newsRptBtn);
+            BuildServiceRow(home, 8f + 2 * (rowH + gap), rowH,
+                "《 我 的 订 阅 》 · 历史刊物都收在卷宗里",
+                "买过的每一份 日报 / 商情报 都留了档, 想翻哪本就点哪本的封皮。\n"
+                + "· 旧《贸易日报》: 打开即那一期正文, 按版面翻页\n"
+                + "· 旧《全球商情报》: 记下订阅月份, 打开以最新行情重绘\n"
+                + "<color=#1A454F>随存读档</color> · 卷宗永久保留",
+                ref _newsSubsBtn);
+            _newsBuyBtn.onClick.AddListener(OnNewsBuyPaper);
+            _newsRptBtn.onClick.AddListener(OnNewsBuyReport);
+            _newsSubsBtn.onClick.AddListener(OnNewsOpenSubs);
+        }
+
+        void BuildServiceRow(Transform home, float bottomY, float rowH, string title, string desc, ref Button btn)
+        {
+            var row = Panel("row", home, P_sheet);
+            RectAt(Rt(row), new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(0.5f, 0f),
+                new Vector2(0f, bottomY), new Vector2(0f, rowH));
+            var t = AddText(row.transform, title, 18, P_navy, TextAnchor.UpperLeft);
+            RectAt(Rt(t.gameObject), new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(0f, 1f),
+                new Vector2(18f, -10f), new Vector2(660f, 26f));
+            var b = AddText(row.transform, desc, 12, P_ink, TextAnchor.UpperLeft);
+            RectAt(Rt(b.gameObject), new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(0f, 1f),
+                new Vector2(18f, -42f), new Vector2(650f, rowH - 54f));
+            btn = MakeBtn(row.transform, "buy", "……", 13, P_bronze, P_btnTx);
+            RectAt(Rt(btn.gameObject), new Vector2(1f, 0.5f), new Vector2(1f, 0.5f), new Vector2(1f, 0.5f),
+                new Vector2(-22f, 0f), new Vector2(228f, rowH - 24f));
+        }
+
+        void OnNewsBuyPaper()
+        {
+            if (play == null) return;
+            if (play.IntelPaperOwnedToday) { var e = play.IntelPaperTodayIssue(); if (e != null) ShowNewsPaper(e); return; }
+            var got = play.IntelBuyPaper();
+            if (got != null) ShowNewsPaper(got);
+        }
+        void OnNewsBuyReport()
+        {
+            if (play == null) return;
+            if (play.IntelReportMonthOwned) { var e = play.IntelReportMonthIssue(); if (e != null) ShowNewsReport(e); return; }
+            var got = play.IntelBuyReport();
+            if (got != null) ShowNewsReport(got);
+        }
+        void OnNewsOpenSubs()
+        {
+            _newsPage = "subs";
+            RebuildSubsList();
+            ApplyNewsPage();
+        }
+
+        // ---------------- 我的订阅: 卷宗抽屉(历史刊物, 随存读档) ----------------
+        void BuildNewsSubs(Transform subs)
+        {
+            var back = MakeBtn(subs.transform, "back", "◀ 大厅", 14, P_bronze, P_btnTx);
+            RectAt(Rt(back.gameObject), new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(0f, 1f),
+                new Vector2(2f, -6f), new Vector2(100f, 32f));
+            back.onClick.AddListener(ShowNewsHome);
+            var hd = AddText(subs.transform, "《 我 的 订 阅 》", 19, P_navy, TextAnchor.MiddleCenter);
+            RectAt(Rt(hd.gameObject), new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(0.5f, 1f),
+                new Vector2(0f, -4f), new Vector2(0f, 28f));
+            var hrule = Panel("hrule", subs.transform, P_rule);
+            RectAt(Rt(hrule), new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(0.5f, 1f),
+                new Vector2(0f, -38f), new Vector2(0f, 1f));
+
+            var vpGo = Panel("vp", subs.transform, P_sheet);
+            var vp = Rt(vpGo);
+            vp.anchorMin = Vector2.zero; vp.anchorMax = Vector2.one;
+            vp.offsetMin = new Vector2(12f, 8f); vp.offsetMax = new Vector2(-12f, -48f);
+            vpGo.AddComponent<Mask>().showMaskGraphic = false;
+            var sr = vpGo.AddComponent<ScrollRect>();
+            sr.horizontal = false; sr.vertical = true;
+            sr.movementType = ScrollRect.MovementType.Clamped;
+            sr.scrollSensitivity = 30f;
+            var content = NewRT("content", vpGo.transform);
+            _subsRoot = Rt(content);
+            _subsRoot.anchorMin = new Vector2(0f, 1f); _subsRoot.anchorMax = new Vector2(1f, 1f);
+            _subsRoot.pivot = new Vector2(0.5f, 1f);
+            _subsRoot.anchoredPosition = Vector2.zero;
+            _subsRoot.sizeDelta = new Vector2(0f, 200f);
+            sr.viewport = vp; sr.content = _subsRoot;
+        }
+
+        void RebuildSubsList()
+        {
+            if (play == null || _subsRoot == null) return;
+            ClearKids(_subsRoot);
+            var list = play.IntelArchiveCount > 0 ? play.IntelArchiveNewestFirst() : new List<SeaIntelSave>();
+            int n = list.Count;
+            var tip = AddText(_subsRoot, n == 0
+                ? "卷宗还空着 —— 去《情报站》大厅买《贸易日报》或订《全球商情报》, 它们会一份份收进这里。"
+                : "已收 " + n + " 卷 · 点封皮即可拆开(最新在前)", 12, P_soft, TextAnchor.UpperLeft);
+            RectAt(Rt(tip.gameObject), new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(0f, 1f),
+                new Vector2(10f, -6f), new Vector2(940f, 24f));
+            if (n == 0) { _subsRoot.sizeDelta = new Vector2(0f, 60f); return; }
+
+            const float cw = 306f, ch = 156f, gap = 14f;
+            int cols = 3;
+            for (int i = 0; i < n; i++)
+            {
+                int col = i % cols, row = i / cols;
+                float x = 8f + col * (cw + gap);
+                float y = -38f - row * (ch + gap);
+                SubsCover(_subsRoot, x, y, cw, ch, list[i]);
+            }
+            int rows = (n + cols - 1) / cols;
+            _subsRoot.sizeDelta = new Vector2(0f, 38f + rows * (ch + gap) + 12f);
+        }
+
+        void SubsCover(Transform parent, float x, float y, float w, float h, SeaIntelSave e)
+        {
+            bool rep = e != null && e.kind == "report";
+            Color paperC = rep ? P_coverNavy : (e != null && e.key % 2 == 0 ? P_coverWine : P_coverOlive);
+            Color ribbon = rep ? P_gold : (e != null && e.key % 2 == 0 ? P_gold : P_rust);
+            Color cream = new Color(0.98f, 0.95f, 0.86f, 1f);
+            var go = NewRT("cover", parent);
+            RectAt(Rt(go), new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(0f, 1f),
+                new Vector2(x, y), new Vector2(w, h));
+            var bg = go.AddComponent<Image>();
+            bg.sprite = White();
+            bg.color = paperC;
+            // 顶部色带(书脊)
+            var rib = NewRT("rib", go.transform).AddComponent<Image>();
+            rib.sprite = White();
+            rib.color = ribbon;
+            RectAt(Rt(rib.gameObject), new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(0.5f, 1f),
+                new Vector2(0f, -1f), new Vector2(0f, 6f));
+
+            string title = e != null ? e.title : "……";
+            string sub = e != null
+                ? (rep ? "订阅存档 · " : "正文快照 · ") + (e.sub ?? "")
+                : "";
+            var tag = AddText(go.transform, rep ? "⚜ 全球商情报" : "📰 贸易日报", 12, cream, TextAnchor.MiddleLeft);
+            RectAt(Rt(tag.gameObject), new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(0f, 1f),
+                new Vector2(12f, -14f), new Vector2(w - 24f, 20f));
+            var tl = AddText(go.transform, title, 16, cream, TextAnchor.MiddleLeft);
+            RectAt(Rt(tl.gameObject), new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(0f, 1f),
+                new Vector2(12f, -42f), new Vector2(w - 24f, 26f));
+            var sl = AddText(go.transform, sub, 11, new Color(0.86f, 0.82f, 0.70f, 1f), TextAnchor.UpperLeft);
+            RectAt(Rt(sl.gameObject), new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(0f, 1f),
+                new Vector2(12f, -84f), new Vector2(w - 24f, 42f));
+            var foot = AddText(go.transform, rep ? "本月行情一表观 · 拆封 ▸" : "翻一页, 回到那一日 ▸", 12, new Color(0.96f, 0.90f, 0.72f, 1f), TextAnchor.MiddleRight);
+            RectAt(Rt(foot.gameObject), new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(1f, 1f),
+                new Vector2(-14f, -22f), new Vector2(w - 28f, 20f));
+            var open = MakeBtn(go.transform, "open", "", 12, new Color(1f, 1f, 1f, 0.012f), P_btnTx, clickSfx: false);
+            RectAt(Rt(open.gameObject), new Vector2(0f, 0f), new Vector2(1f, 1f), new Vector2(0.5f, 0.5f),
+                Vector2.zero, Vector2.zero);
+            open.onClick.AddListener(() => OpenSubsIntel(e));
+        }
+
+        void OpenSubsIntel(SeaIntelSave e)
+        {
+            if (e == null) return;
+            if (e.kind == "report") ShowNewsReport(e);
+            else ShowNewsPaper(e);
+        }
+
+        // ---------------- 《贸易日报》: 翻页报纸(正文按"块"排成版面, 羊皮纸刊) ----------------
+        void BuildNewsPaper(Transform paper)
+        {
+            var back = MakeBtn(paper.transform, "back", "◀ 大厅", 14, P_bronze, P_btnTx);
+            RectAt(Rt(back.gameObject), new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(0f, 1f),
+                new Vector2(8f, -6f), new Vector2(100f, 32f));
+            back.onClick.AddListener(ShowNewsHome);
+            _paperMast = AddText(paper.transform, "", 30, P_navy, TextAnchor.MiddleCenter);
+            RectAt(Rt(_paperMast.gameObject), new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(0.5f, 1f),
+                new Vector2(0f, -6f), new Vector2(0f, 40f));
+            var mrule = Panel("mrule", paper.transform, P_rule);
+            RectAt(Rt(mrule), new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(0.5f, 1f),
+                new Vector2(0f, -50f), new Vector2(0f, 1f));
+            _paperSub = AddText(paper.transform, "", 13, P_soft, TextAnchor.MiddleCenter);
+            RectAt(Rt(_paperSub.gameObject), new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(0.5f, 1f),
+                new Vector2(0f, -60f), new Vector2(0f, 22f));
+
+            // 版面主体: 羊皮纸刊页, 蒙版裁切(一版一版翻, 不用滚)
+            var vpGo = Panel("body", paper.transform, P_sheet);
+            var vp = Rt(vpGo);
+            vp.anchorMin = Vector2.zero; vp.anchorMax = Vector2.one;
+            vp.offsetMin = new Vector2(10f, 48f); vp.offsetMax = new Vector2(-10f, -88f);
+            vpGo.AddComponent<Mask>().showMaskGraphic = false;
+            _paperBody = AddText(vpGo.transform, "", 12, P_ink, TextAnchor.UpperLeft);
+            var bt = Rt(_paperBody.gameObject);
+            bt.anchorMin = new Vector2(0f, 1f); bt.anchorMax = new Vector2(0f, 1f);
+            bt.pivot = new Vector2(0f, 1f);
+            bt.anchoredPosition = Vector2.zero;
+            bt.sizeDelta = new Vector2(_pageW, 4000f);
+
+            _paperPrev = MakeBtn(paper.transform, "prev", "◀ 上一版", 13, P_bronze, P_btnTx);
+            RectAt(Rt(_paperPrev.gameObject), new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(0.5f, 0f),
+                new Vector2(-160f, 8f), new Vector2(120f, 30f));
+            _paperPrev.onClick.AddListener(() => PaperGo(-1));
+            _paperFolio = AddText(paper.transform, "", 13, P_rust, TextAnchor.MiddleCenter);
+            RectAt(Rt(_paperFolio.gameObject), new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(0.5f, 0f),
+                new Vector2(0f, 6f), new Vector2(280f, 24f));
+            _paperNext = MakeBtn(paper.transform, "next", "下一版 ▶", 13, P_bronze, P_btnTx);
+            RectAt(Rt(_paperNext.gameObject), new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(0.5f, 0f),
+                new Vector2(160f, 8f), new Vector2(120f, 30f));
+            _paperNext.onClick.AddListener(() => PaperGo(1));
+        }
+
+        static float PaperLineH(string s)
+        {
+            int size = 12, i = s.IndexOf("<size=");
+            if (i >= 0)
+            {
+                int j = s.IndexOf('>', i);
+                int v;
+                if (j > i + 6 && int.TryParse(s.Substring(i + 6, j - i - 6), out v) && v >= 8 && v <= 60) size = v;
+            }
+            return size * 1.28f;
+        }
+        static float PaperBlockH(string block)
+        {
+            float h = 0f;
+            var lines = block.Split('\n');
+            for (int i = 0; i < lines.Length; i++)
+                h += lines[i].Length == 0 ? 4f : PaperLineH(lines[i]);
+            return h;
+        }
+
+        void PaginatePaper()
+        {
+            _paperPages.Clear();
+            string body = _paperSig ?? "";
+            if (body.Length == 0) { _paperPages.Add(""); return; }
+            var parts = new List<string>();
+            foreach (var b in body.Split(SeaPlay.IntelBlockSep))
+            {
+                var t = b.TrimStart('\n');
+                if (t.Length > 0) parts.Add(t);
+            }
+            if (parts.Count == 0) { _paperPages.Add(""); return; }
+            float budget = _pageH;
+            var cur = new System.Text.StringBuilder(512);
+            float curH = 0f;
+            foreach (var b in parts)
+            {
+                float bh = PaperBlockH(b);
+                if (cur.Length > 0 && curH + bh > budget)
+                {
+                    _paperPages.Add(cur.ToString());
+                    cur.Length = 0; curH = 0f;
+                }
+                cur.Append(b).Append('\n');
+                curH += bh;
+            }
+            if (cur.Length > 0) _paperPages.Add(cur.ToString());
+            if (_paperPages.Count == 0) _paperPages.Add("");
+        }
+
+        void PaperGo(int d)
+        {
+            if (_paperPages.Count == 0) PaginatePaper();
+            int n = _paperPages.Count;
+            _paperIdx = Mathf.Clamp(_paperIdx + d, 0, n - 1);
+            if (_paperBody != null) _paperBody.text = n > 0 ? _paperPages[_paperIdx] : "";
+            if (_paperFolio != null) _paperFolio.text = n > 0 ? "—— 第 " + (_paperIdx + 1) + " / " + n + " 版 ——" : "";
+            if (_paperPrev != null) _paperPrev.interactable = _paperIdx > 0;
+            if (_paperNext != null) _paperNext.interactable = n > 0 && _paperIdx < n - 1;
+        }
+
+        void ShowNewsPaper(SeaIntelSave e)
+        {
+            if (play == null) return;
+            if (e == null) e = play.IntelPaperTodayIssue();
+            _openPaper = e;
+            _newsPage = "paper";
+            _paperMast.text = "《 贸 易 日 报 》";
+            if (e != null)
+            {
+                _paperSig = e.body;
+                _paperSub.text = e.title + " · " + e.sub;
+            }
+            else
+            {
+                _paperSig = "";
+                _paperSub.text = "本期还没买到 —— 回大厅买一份今日《" + SeaPlay.IntelPaperName + "》。";
+            }
+            PaginatePaper();
+            _paperIdx = 0;
+            PaperGo(0);
+            ApplyNewsPage();
+        }
+
+        // ---------------- 《全球商情报》: 一个航区 × 全部货物 一张表 ----------------
+        void BuildNewsReport(Transform report)
+        {
+            var back = MakeBtn(report.transform, "back", "◀ 大厅", 14, P_bronze, P_btnTx);
+            RectAt(Rt(back.gameObject), new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(0f, 1f),
+                new Vector2(8f, -6f), new Vector2(100f, 32f));
+            back.onClick.AddListener(ShowNewsHome);
+            _rptCap = AddText(report.transform, "", 18, P_navy, TextAnchor.MiddleCenter);
+            RectAt(Rt(_rptCap.gameObject), new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(0.5f, 1f),
+                new Vector2(0f, -4f), new Vector2(0f, 28f));
+            _rptNote = AddText(report.transform, "", 12, P_soft, TextAnchor.MiddleCenter);
+            RectAt(Rt(_rptNote.gameObject), new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(0.5f, 1f),
+                new Vector2(0f, -34f), new Vector2(0f, 22f));
+
+            var pv = MakeBtn(report.transform, "aprev", "◀", 14, P_bronze, P_btnTx, clickSfx: false);
+            RectAt(Rt(pv.gameObject), new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0.5f, 1f),
+                new Vector2(-160f, -62f), new Vector2(56f, 30f));
+            pv.onClick.AddListener(() => StepReportArea(-1));
+            var nx = MakeBtn(report.transform, "anext", "▶", 14, P_bronze, P_btnTx, clickSfx: false);
+            RectAt(Rt(nx.gameObject), new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0.5f, 1f),
+                new Vector2(160f, -62f), new Vector2(56f, 30f));
+            nx.onClick.AddListener(() => StepReportArea(1));
+            _rptAreaLbl = AddText(report.transform, "", 15, P_ink, TextAnchor.MiddleCenter);
+            RectAt(Rt(_rptAreaLbl.gameObject), new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0.5f, 1f),
+                new Vector2(0f, -62f), new Vector2(300f, 30f));
+
+            // 表头行(墨绿, 不随表滚)
+            var hRow = Rt(NewRT("thead", report.transform));
+            RectAt(hRow, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(0.5f, 1f),
+                new Vector2(0f, -100f), new Vector2(0f, 22f));
+            float hx = 0f;
+            for (int i = 0; i < RptW.Length; i++)
+            {
+                RowCell(hRow, RptHd[i], 12, P_navy, RptAl[i], 12f + hx, RptW[i]);
+                hx += RptW[i];
+            }
+
+            var vpGo = Panel("vp", report.transform, P_sheet);
+            var vp = Rt(vpGo);
+            vp.anchorMin = Vector2.zero; vp.anchorMax = Vector2.one;
+            vp.offsetMin = new Vector2(12f, 8f); vp.offsetMax = new Vector2(-12f, -132f);
+            vpGo.AddComponent<Mask>().showMaskGraphic = false;
+            var sr = vpGo.AddComponent<ScrollRect>();
+            sr.horizontal = false; sr.vertical = true;
+            sr.movementType = ScrollRect.MovementType.Clamped;
+            sr.scrollSensitivity = 24f;
+            var content = NewRT("content", vpGo.transform);
+            _rptRows = Rt(content);
+            _rptRows.anchorMin = new Vector2(0f, 1f); _rptRows.anchorMax = new Vector2(1f, 1f);
+            _rptRows.pivot = new Vector2(0.5f, 1f);
+            _rptRows.anchoredPosition = Vector2.zero;
+            _rptRows.sizeDelta = new Vector2(0f, 40f);
+            sr.viewport = vp; sr.content = _rptRows;
+        }
+
+        void ShowNewsReport(SeaIntelSave e)
+        {
+            if (play == null) return;
+            if (e == null) e = play.IntelReportMonthIssue();
+            _openReport = e;
+            _newsPage = "report";
+            _rptAreas = AreaOrder();
+            if (_rptAreas.Count > 0)
+            {
+                if (play.Current != null && play.Current.Area != null)
+                {
+                    int cur = _rptAreas.IndexOf(play.Current.Area);
+                    if (cur >= 0) _rptArea = cur;
+                }
+            }
+            RefreshReportHead(e);
+            RebuildReportList();
+            ApplyNewsPage();
+        }
+
+        void RefreshReportHead(SeaIntelSave e)
+        {
+            if (play == null) return;
+            string subj = e != null && !string.IsNullOrEmpty(e.title) ? " · " + e.title : "";
+            _rptCap.text = "《 " + SeaPlay.IntelReportName + " 》" + subj;
+            int d = play.HistNewestDay >= 0 ? play.HistNewestDay
+                : (play.engine != null ? play.engine.Day : 0);
+            _rptNote.text = "<color=#9E4A24><b>行情统计至 " + SeaPlay.IntelDateText(d) + "</b></color>"
+                + " · 供→求按本航区逐货找最低最高 · ▲▼ 相对约 7 日前 · 随最新行情重绘";
+        }
+
+        void StepReportArea(int d)
+        {
+            if (_rptAreas == null || _rptAreas.Count == 0) return;
+            _rptArea = (_rptArea + d + _rptAreas.Count) % _rptAreas.Count;
+            RebuildReportList();
+        }
+
+        void RefreshAreaPicker()
+        {
+            if (_rptAreas == null) _rptAreas = AreaOrder();
+            if (_rptAreas.Count == 0) { if (_rptAreaLbl != null) _rptAreaLbl.text = "航区: ——"; return; }
+            _rptArea = Mathf.Clamp(_rptArea, 0, _rptAreas.Count - 1);
+            var a = _rptAreas[_rptArea];
+            if (_rptAreaLbl != null)
+                _rptAreaLbl.text = "航区: " + (a != null ? a.Name : "?") + "   (" + (_rptArea + 1) + "/" + _rptAreas.Count + ")";
+        }
+
+        int TrendAsk(int pi, int gi)
+        {
+            int n = play != null ? play.HistCount : 0;
+            if (pi < 0 || n < 2) return 0;
+            int k2 = n - 1, k1 = k2 - 7; if (k1 < 0) k1 = 0;
+            int a0 = play.HistAskValue(k1, pi, gi), a1 = play.HistAskValue(k2, pi, gi);
+            if (a0 < 0 || a1 < 0) return 0;
+            return a1 > a0 ? 1 : (a1 < a0 ? -1 : 0);
+        }
+        int TrendBid(int pi, int gi)
+        {
+            int n = play != null ? play.HistCount : 0;
+            if (pi < 0 || n < 2) return 0;
+            int k2 = n - 1, k1 = k2 - 7; if (k1 < 0) k1 = 0;
+            int b0 = play.HistBidValue(k1, pi, gi), b1 = play.HistBidValue(k2, pi, gi);
+            if (b0 < 0 || b1 < 0) return 0;
+            return b1 > b0 ? 1 : (b1 < b0 ? -1 : 0);
+        }
+        static string TrendMark(int d) { return d > 0 ? "▲" : (d < 0 ? "▼" : "—"); }
+        static Color TrendCol(int d) { return d > 0 ? P_rust : (d < 0 ? P_moss : P_soft); }
+
+        void RebuildReportList()
+        {
+            if (play == null || play.world == null || _rptRows == null) return;
+            var w = play.world;
+            if (_rptAreas == null) _rptAreas = AreaOrder();
+            if (_rptAreas.Count == 0) return;
+            _rptArea = Mathf.Clamp(_rptArea, 0, _rptAreas.Count - 1);
+            var area = _rptAreas[_rptArea];
+            RefreshAreaPicker();
+
+            int G = w.Goods.Count;
+            var askMin = new int[G]; var bidMax = new int[G];
+            var askPi = new int[G]; var bidPi = new int[G];
+            var askCity = new string[G]; var bidCity = new string[G];
+            var hasA = new bool[G]; var hasB = new bool[G];
+            for (int gi = 0; gi < G; gi++) { askMin[gi] = int.MaxValue; bidMax[gi] = -1; askPi[gi] = -1; bidPi[gi] = -1; }
+            var en = play.engine;
+            for (int pi = 0; pi < w.Ports.Count; pi++)
+            {
+                var p = w.Ports[pi];
+                if (p == null || p.Area != area || p.Blocked) continue;
+                for (int gi = 0; gi < G; gi++)
+                {
+                    var g = w.Goods[gi];
+                    if (g == null) continue;
+                    var c = en.GetCell(p, g);
+                    if (c.Produced)
+                    {
+                        hasA[gi] = true;
+                        int a = en.AskPrice(p, g);
+                        if (a >= 0 && a < askMin[gi]) { askMin[gi] = a; askPi[gi] = pi; askCity[gi] = p.Name; }
+                    }
+                    if (c.Needed)
+                    {
+                        hasB[gi] = true;
+                        int b = en.BidPrice(p, g);
+                        if (b > bidMax[gi]) { bidMax[gi] = b; bidPi[gi] = pi; bidCity[gi] = p.Name; }
+                    }
+                }
+            }
+
+            ClearKids(_rptRows);
+            int shown = 0;
+            for (int gi = 0; gi < G; gi++)
+            {
+                bool a = hasA[gi], b = hasB[gi];
+                if (!a && !b) continue;
+                var row = Rt(NewRT("row" + shown, _rptRows));
+                row.anchorMin = new Vector2(0f, 1f); row.anchorMax = new Vector2(1f, 1f);
+                row.pivot = new Vector2(0.5f, 1f);
+                row.anchoredPosition = new Vector2(0f, -(shown * 26f + 2f));
+                row.sizeDelta = new Vector2(0f, 24f);
+                int ad = a ? TrendAsk(askPi[gi], gi) : 0;
+                int bd = b ? TrendBid(bidPi[gi], gi) : 0;
+                bool both = a && b;
+                int margin = both ? bidMax[gi] - askMin[gi] : 0;
+                Color marCol = both && margin > 0 ? P_rust : P_soft;
+                string aPrice = a ? askMin[gi].ToString() : "—";
+                string bPrice = b ? bidMax[gi].ToString() : "—";
+                float x = 0f;
+                RowCell(row, w.Goods[gi].Name, 13, P_ink, RptAl[0], x, RptW[0]); x += RptW[0];
+                RowCell(row, a ? askCity[gi] : "—", 12, P_soft, RptAl[1], x, RptW[1]); x += RptW[1];
+                RowCell(row, aPrice, 13, P_gold, RptAl[2], x, RptW[2]); x += RptW[2];
+                RowCell(row, a ? TrendMark(ad) : "—", 13, a ? TrendCol(ad) : P_soft, RptAl[3], x, RptW[3]); x += RptW[3];
+                RowCell(row, b ? bidCity[gi] : "—", 12, P_soft, RptAl[4], x, RptW[4]); x += RptW[4];
+                RowCell(row, bPrice, 13, P_gold, RptAl[5], x, RptW[5]); x += RptW[5];
+                RowCell(row, b ? TrendMark(bd) : "—", 13, b ? TrendCol(bd) : P_soft, RptAl[6], x, RptW[6]); x += RptW[6];
+                RowCell(row, both ? margin.ToString() : "—", 13, marCol, RptAl[7], x, RptW[7]);
+                shown++;
+            }
+            _rptRows.sizeDelta = new Vector2(0f, shown * 26f + 4f);
+            if (shown == 0)
+            {
+                var none = AddText(_rptRows, "本航区暂无在产 / 在求的货物。", 13, P_soft, TextAnchor.MiddleCenter);
+                RectAt(Rt(none.gameObject), new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(0.5f, 1f),
+                    new Vector2(0f, 0f), new Vector2(0f, 40f));
+            }
+        }

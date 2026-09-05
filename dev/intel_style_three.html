@@ -1,0 +1,273 @@
+<title>情报站 质感提案</title>
+<meta charset="utf-8">
+<style>
+  :root{
+    --desk:#171b21; --desk2:#1d222a; --line:#2a313b;
+    --t:#edf1f5; --m:#a8b3bf; --d:#6c7783;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{background:var(--desk);color:var(--m);
+    font-family:"Noto Sans CJK SC","Microsoft YaHei","PingFang SC",sans-serif;
+    line-height:1.55; -webkit-font-smoothing:antialiased;}
+  .serif{font-family:"Noto Serif CJK SC","Source Han Serif SC","Songti SC","SimSun",serif}
+  .wrap{max-width:1180px;margin:0 auto;padding:44px 26px 70px}
+  .kick{letter-spacing:.35em;font-size:12px;color:var(--d);margin:0 0 10px}
+  h1{margin:0 0 10px;font-size:30px;color:var(--t);letter-spacing:.04em}
+  .sub{color:var(--m);font-size:14px;max-width:820px;margin:0 0 6px}
+  .sub b{color:var(--t);font-weight:600}
+  .legend{display:flex;flex-wrap:wrap;gap:10px;margin:20px 0 8px}
+  .tag{font-size:11px;color:var(--d);border:1px solid var(--line);border-radius:99px;padding:4px 12px}
+  .ask{margin:26px 0 8px;font-size:13px;color:var(--m)}
+  .ask b{color:#e6b455}
+
+  .sec{display:grid;grid-template-columns:1fr;gap:0;margin:18px 0;background:var(--desk2);
+    border:1px solid var(--line);border-radius:14px;overflow:hidden}
+  .sechead{display:flex;align-items:center;gap:14px;padding:16px 20px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+  .idx{font-family:"Noto Serif CJK SC",serif;font-size:22px;line-height:1}
+  .nm{font-size:19px;color:var(--t);letter-spacing:.06em}
+  .vh{font-size:12px;color:var(--d)}
+  .pal{display:flex;gap:6px;margin-left:auto;align-items:center}
+  .chip{width:20px;height:20px;border-radius:5px;border:1px solid rgba(255,255,255,.14);box-shadow:0 0 0 1px rgba(0,0,0,.25)}
+  .pal .lbl{font-size:10px;color:var(--d);margin-right:4px}
+  .note{grid-column:1/-1;padding:2px 20px 0;font-size:12px;color:var(--m)}
+  .note code{color:var(--t);background:rgba(255,255,255,.06);padding:1px 5px;border-radius:4px;font-size:11px}
+
+  .screens{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:14px;padding:16px 20px 20px}
+  .scr h4{margin:0 0 8px;font-size:12px;color:var(--d);font-weight:600;letter-spacing:.08em}
+  .cap{margin-top:8px;font-size:11px;color:var(--d)}
+
+  .win{border-radius:8px;padding:12px 12px 10px;box-shadow:0 6px 18px rgba(0,0,0,.28);position:relative;overflow:hidden}
+  .win .bar{height:8px;margin:-12px -12px 10px;display:flex;align-items:center;padding:0 6px;gap:4px}
+  .win .bar i{width:5px;height:5px;border-radius:50%;display:inline-block;background:rgba(255,255,255,.28)}
+  .mast{text-align:center;font-family:"Noto Serif CJK SC","Songti SC",serif;font-weight:700;letter-spacing:.18em;font-size:15px;line-height:1.15}
+  .double{border-top:2px solid var(--mrule);border-bottom:1px solid var(--mrule);margin:4px auto 6px;width:100%;height:5px}
+  .dateline{font-size:8px;text-align:center;opacity:.75;letter-spacing:.1em;margin:2px 0 5px}
+  .rowl{font-size:8px;margin:3px 0;padding:2px 4px;line-height:1.4}
+  .rowl .lead{font-weight:700}
+  .cols{display:flex;gap:8px;margin-top:5px}
+  .col{flex:1;font-size:7.5px;line-height:1.5;opacity:.92}
+
+  table.mini{width:100%;border-collapse:collapse;font-size:8px;margin-top:2px}
+  table.mini th{font-weight:600;padding:3px 3px;text-align:left;letter-spacing:.03em}
+  table.mini td{padding:2.5px 3px;border-bottom:1px solid var(--mrow)}
+  table.mini td.num,table.mini th.num{text-align:right;font-variant-numeric:tabular-nums}
+  .up{font-weight:700}
+  .foot{font-size:7.5px;opacity:.8;margin-top:6px;text-align:center;letter-spacing:.12em}
+
+  .shelf{display:flex;gap:8px;margin-top:8px}
+  .bk{flex:1;min-height:88px;border-radius:4px;display:flex;flex-direction:column;justify-content:flex-end;padding:6px;box-shadow:0 5px 12px rgba(0,0,0,.3)}
+  .bk .k{font-size:6.5px;opacity:.85;letter-spacing:.08em}
+  .bk .t{font-family:"Noto Serif CJK SC","Songti SC",serif;font-weight:700;font-size:8.5px;margin:2px 0 0;line-height:1.25}
+  .bk .rib{height:2px;margin:4px 0 0}
+
+  .footp{color:var(--d);font-size:12px;max-width:820px;margin:26px 0 0;line-height:1.8}
+  .footp b{color:#e6b455}
+
+  /* ---- A 油墨晨报 ---- */
+  .a .idx{color:#d9a13f}
+  .a .win{background:var(--p);color:var(--ink);border:1px solid var(--mrule)}
+  .a .mast{color:var(--ink)}
+  .a .rowl:nth-child(odd){background:var(--row)}
+  .a .rowl b{color:var(--red)}
+
+  /* ---- B 羊皮海图 ---- */
+  .b .idx{color:#3f7e92}
+  .b .win{background:var(--p);color:var(--ink);border:1px solid var(--mrule)}
+  .b .mast{color:var(--ink)}
+  .b .mast span{color:var(--red)}
+  .b .rowl{border-left:2px solid var(--accent);padding-left:6px;margin-left:1px}
+  .b .win .gridln{position:absolute;inset:0;opacity:.16;pointer-events:none}
+
+  /* ---- C 夜航暗金 ---- */
+  .c .idx{color:#d9a441}
+  .c .win{background:var(--p);color:var(--ink);border:1px solid var(--mrule)}
+  .c .mast{color:var(--gold)}
+  .c .rowl{color:var(--soft)}
+  .c .rowl .lead{color:var(--gold)}
+  .c table.mini th{color:var(--gold)}
+</style>
+
+<div class="wrap">
+  <p class="kick serif">情报站 · INTEL SHOP · 换一种质感</p>
+  <h1 class="serif">《贸易日报》/《全球商情报》/《我的订阅》<br>三种整体视觉语言</h1>
+  <p class="sub">三块页面的 UI 都是<b>代码绘制</b>(纯色块 + 文字, 无贴图), 所以下方案是“配色 × 版式 × 材质语言”, 每案都可整页落地。挑中后我先把对应语言落进 SeaHud 情报站代码, 再继续 #60 logo 与编译出包。</p>
+  <div class="legend">
+    <span class="tag">A 油墨晨报 —— 报纸真实感最强</span>
+    <span class="tag">B 羊皮海图 —— 最贴《大航海时代4》航海图味道</span>
+    <span class="tag">C 夜航暗金 —— 贴近现有代码风格、改动最小</span>
+  </div>
+
+  <!-- ============ A ============ -->
+  <div class="sec a">
+    <div class="sechead">
+      <div class="idx serif">A</div>
+      <div class="nm serif">油墨晨报</div>
+      <div class="vh">凌晨报馆柜台 · 整片米纸铅字, 报价如油墨印刷</div>
+      <div class="pal">
+        <span class="lbl">调色</span>
+        <span class="chip" style="background:#2a2117"></span><span class="chip" style="background:#f4ead2"></span>
+        <span class="chip" style="background:#a87c20"></span><span class="chip" style="background:#b03927"></span><span class="chip" style="background:#2e4a52"></span>
+      </div>
+    </div>
+    <div class="screens">
+      <div class="scr"><h4>贸易日报 · 翻页</h4>
+        <div class="win" style="--p:#f6ecd3;--ink:#2a2117;--mrule:#a08a52;--row:#efe2bf">
+          <div class="bar"><i></i><i></i><i></i></div>
+          <div class="mast">貿 易 日 報</div>
+          <div class="double"></div>
+          <div class="dateline serif">1550 年 6 月 3 日 · 每日一刊 · 刊价 100 金</div>
+          <div class="rowl"><span class="lead">◆ 晨报速递 · 抄底</span> 锡兰的<b>胡椒</b> 供货 128 金 · 存 96 件</div>
+          <div class="rowl"><span class="lead">◆ 晨报速递 · 出手</span> 把<b>茶叶</b>运去长崎 求 412 金 · 单件毛利约 240</div>
+          <div class="cols"><div class="col serif">泉州 · 大港 —— 瓷器 供货 180 金 · 存 40 件; 生丝 求购 300 金……</div><div class="col serif">马六甲 —— 香料 供货 96 金 · 存 120 件; 丁香 求购 240 金, 约可收 30 件……</div></div>
+          <div class="foot">—— 第 1 / 3 版 ——　◀ 上一版　下一版 ▶</div>
+        </div>
+        <div class="cap">纸底 + 铅字墨 + 双细线报头; 富文本“版内排字”, 版次仿报角。</div>
+      </div>
+      <div class="scr"><h4>商情报 · 一张表</h4>
+        <div class="win" style="--p:#f6ecd3;--ink:#2a2117;--mrule:#b3a06b;--mrow:#e6d9b6">
+          <div class="bar"><i></i><i></i><i></i></div>
+          <div class="mast" style="font-size:12px;letter-spacing:.1em">全球商情报 · 马六甲航区</div>
+          <div class="double"></div>
+          <table class="mini"><tr><th>商品</th><th>产地</th><th class="num">供价</th><th class="num">求价</th><th class="num">毛利</th></tr>
+            <tr><td><b>胡椒</b></td><td>锡兰</td><td class="num">128</td><td class="num">360</td><td class="num up" style="color:#b03927">▲ 232</td></tr>
+            <tr><td><b>香料</b></td><td>马六甲</td><td class="num">96</td><td class="num">—</td><td class="num">—</td></tr>
+          </table>
+          <div class="foot serif">行情统计至 6 月 3 日 · 一个航区一张表</div>
+        </div>
+        <div class="cap">米纸账页 + 细墨线格; 涨红跌青如笔墨批注。</div>
+      </div>
+      <div class="scr"><h4>我的订阅 · 书架</h4>
+        <div class="win" style="--p:#f6ecd3;--ink:#2a2117;--mrule:#a08a52">
+          <div class="bar"><i></i><i></i><i></i></div>
+          <div class="mast" style="font-size:12px;letter-spacing:.1em">我的订阅</div>
+          <div class="double"></div>
+          <div class="shelf">
+            <div class="bk" style="background:#b03927"><div class="k" style="color:#f3e7cf">📰 贸易日报</div><div class="t" style="color:#fff">6月3日刊</div><div class="rib" style="background:#a87c20"></div></div>
+            <div class="bk" style="background:#2e4a52"><div class="k" style="color:#dbe6e8">📈 全球商情报</div><div class="t" style="color:#fff">1550年6月</div><div class="rib" style="background:#a87c20"></div></div>
+            <div class="bk" style="background:#4c5a33"><div class="k" style="color:#e2e6d4">📰 贸易日报</div><div class="t" style="color:#fff">6月2日刊</div><div class="rib" style="background:#a87c20"></div></div>
+          </div>
+          <div class="foot">—— 书架 · 点封面翻开 ——</div>
+        </div>
+        <div class="cap">纸书封 + 铜色烫金字 + 色带脊; 深木底上三色封。</div>
+      </div>
+    </div>
+    <p class="note">大厅/柜台用 <code>深夜胡桃木 + 黄铜灯</code> 托底, 三份刊物在台上如真正的纸品。数字给 <code>tabular-nums</code>。最还原“报纸”二字。</p>
+  </div>
+
+  <!-- ============ B ============ -->
+  <div class="sec b">
+    <div class="sechead">
+      <div class="idx serif">B</div>
+      <div class="nm serif">羊皮海图</div>
+      <div class="vh">绘图房案 · 老羊皮纸 + 罗盘红, 情报如船长笔记</div>
+      <div class="pal">
+        <span class="lbl">调色</span>
+        <span class="chip" style="background:#e6d0a2"></span><span class="chip" style="background:#3a2b16"></span>
+        <span class="chip" style="background:#1e4e5c"></span><span class="chip" style="background:#a33e24"></span><span class="chip" style="background:#8e2a22"></span>
+      </div>
+    </div>
+    <div class="screens">
+      <div class="scr"><h4>贸易日报 · 翻页</h4>
+        <div class="win" style="--p:#e9d4a6;--ink:#3a2b16;--mrule:#8a6a33;--accent:#a33e24">
+          <div class="bar"><i></i><i></i><i></i></div>
+          <div class="mast">⚜ 贸 易 日 报 <span>· 环球消息</span></div>
+          <div class="double" style="border-top-color:#a33e24;border-bottom-color:#8a6a33"></div>
+          <div class="dateline serif">1550 年 6 月 3 日 · 出刊</div>
+          <div class="rowl"><span class="lead" style="color:#1e4e5c">抄底:</span> 锡兰 胡椒 <b>128</b> 金 · 存 96 件</div>
+          <div class="rowl"><span class="lead" style="color:#1e4e5c">出手:</span> 运茶叶至长崎, 求 <b>412</b> 金 · 毛利约 240</div>
+          <div class="cols serif"><div class="col">泉州(大港) ●瓷器 180 金; 生丝 求 300 金……</div><div class="col">马六甲 ●香料 96 金 · 存 120; 丁香 求 240……</div></div>
+          <div class="foot serif">第 1 / 3 版 · 上一版 · 下一版</div>
+        </div>
+        <div class="cap">羊皮纸 + 赭墨, 列表如船舷侧记, 项前加罗盘红竖条。</div>
+      </div>
+      <div class="scr"><h4>商情报 · 一张表</h4>
+        <div class="win" style="--p:#e9d4a6;--ink:#3a2b16;--mrule:#b08d4e;--mrow:#dcc290">
+          <div class="bar"><i></i><i></i><i></i></div>
+          <div class="mast" style="font-size:12px">马六甲航区 · 行情簿</div>
+          <div class="double" style="border-top-color:#1e4e5c"></div>
+          <table class="mini"><tr><th style="color:#1e4e5c">货物</th><th>产地/销地</th><th class="num">供价</th><th class="num">求价</th><th class="num">毛利</th></tr>
+            <tr><td><b>胡椒</b></td><td>锡兰 → 开罗</td><td class="num">128</td><td class="num">360</td><td class="num up" style="color:#a33e24">▲232</td></tr>
+            <tr><td><b>香料</b></td><td>马六甲 → —</td><td class="num">96</td><td class="num">—</td><td class="num">—</td></tr>
+          </table>
+          <div class="foot serif">统计至 6 月 3 日 · 供需一表观</div>
+        </div>
+        <div class="cap">账页 + 墨绿表头 + 航海红涨跌, 产地销地一条航路箭头连读。</div>
+      </div>
+      <div class="scr"><h4>我的订阅 · 卷宗抽屉</h4>
+        <div class="win" style="--p:#e9d4a6;--ink:#3a2b16;--mrule:#8a6a33">
+          <div class="bar"><i></i><i></i><i></i></div>
+          <div class="mast" style="font-size:12px">已收情报卷</div>
+          <div class="double"></div>
+          <div class="shelf">
+            <div class="bk" style="background:#8e2a22"><div class="k" style="color:#f0dfc0">日报 · 封蜡</div><div class="t" style="color:#fff">6·3</div></div>
+            <div class="bk" style="background:#1e4e5c"><div class="k" style="color:#d9e6ea">商情报</div><div class="t" style="color:#fff">1550·6</div></div>
+            <div class="bk" style="background:#4c5a33"><div class="k" style="color:#e4e6d2">日报</div><div class="t" style="color:#fff">6·2</div></div>
+          </div>
+          <div class="foot serif">红蜡封口 · 拆封即阅</div>
+        </div>
+        <div class="cap">红蜡封 / 墨绿卷宗 / 橄榄袋; 封面各烙一枚航海小符。</div>
+      </div>
+    </div>
+    <p class="note">每个封面盖一枚<b>红蜡印</b>圆点当“查看”目标; 表头用 <code>墨绿(#1e4e5c)</code>, 涨跌用 <code>航海红(#a33e24)</code>。最有“远洋航海时代”的戏味。</p>
+  </div>
+
+  <!-- ============ C ============ -->
+  <div class="sec c">
+    <div class="sechead">
+      <div class="idx serif">C</div>
+      <div class="nm serif">夜航暗金</div>
+      <div class="vh">船长舱 · 灯下墨黑 + 黄铜高光, 改动最小、最沉稳</div>
+      <div class="pal">
+        <span class="lbl">调色</span>
+        <span class="chip" style="background:#0c1117"></span><span class="chip" style="background:#d9a441"></span>
+        <span class="chip" style="background:#e2724a"></span><span class="chip" style="background:#4f8a6e"></span><span class="chip" style="background:#a7b3be"></span>
+      </div>
+    </div>
+    <div class="screens">
+      <div class="scr"><h4>贸易日报 · 翻页</h4>
+        <div class="win" style="--p:#0c1117;--ink:#efe7d4;--mrule:#5a6673;--soft:#a7b3be;--gold:#d9a441">
+          <div class="bar"><i></i><i></i><i></i></div>
+          <div class="mast">貿易日報</div>
+          <div class="double" style="border-color:#6b5a2f"></div>
+          <div class="dateline" style="color:#8a97a3">1550 年 6 月 3 日 · 每夜出刊 · 100 金</div>
+          <div class="rowl"><span class="lead">◆ 抄底</span> 锡兰 胡椒 <span style="color:#f2c96b">128</span> 金 · 存 96</div>
+          <div class="rowl"><span class="lead">◆ 出手</span> 茶叶 → 长崎 <span style="color:#f2c96b">412</span> 金 · 毛利约 240</div>
+          <div class="cols"><div class="col">泉州 · 大港 —— 瓷器 180 金 · 生丝 求 300……</div><div class="col">马六甲 —— 香料 96 金 · 丁香 求 240……</div></div>
+          <div class="foot" style="color:#8a97a3">—— 第 1 / 3 版 ——</div>
+        </div>
+        <div class="cap">墨黑底“夜版”, 黄铜刊头与版线, 浅金数据 = 船灯照到的那格。</div>
+      </div>
+      <div class="scr"><h4>商情报 · 一张表</h4>
+        <div class="win" style="--p:#0c1117;--ink:#efe7d4;--mrule:#39434d;--mrow:#1a232c;--gold:#d9a441">
+          <div class="bar"><i></i><i></i><i></i></div>
+          <div class="mast" style="font-size:12px">全球商情报 · 马六甲</div>
+          <div class="double" style="border-color:#6b5a2f"></div>
+          <table class="mini"><tr><th>商品</th><th>产地/销地</th><th class="num">供价</th><th class="num">求价</th><th class="num">毛利</th></tr>
+            <tr><td>胡椒</td><td>锡兰 → 开罗</td><td class="num">128</td><td class="num">360</td><td class="num up" style="color:#e2724a">▲232</td></tr>
+            <tr><td>香料</td><td>马六甲 → —</td><td class="num">96</td><td class="num">—</td><td class="num">—</td></tr>
+          </table>
+          <div class="foot" style="color:#8a97a3">行情统计至 6 月 3 日</div>
+        </div>
+        <div class="cap">延续现有深底金字的观感, 但表头换黄铜字、行线压暗一档更耐看。</div>
+      </div>
+      <div class="scr"><h4>我的订阅 · 书架</h4>
+        <div class="win" style="--p:#0c1117;--ink:#efe7d4;--mrule:#39434d;--gold:#d9a441">
+          <div class="bar"><i></i><i></i><i></i></div>
+          <div class="mast" style="font-size:12px">我的订阅</div>
+          <div class="double" style="border-color:#6b5a2f"></div>
+          <div class="shelf">
+            <div class="bk" style="background:#17222c;border:1px solid #39434d"><div class="k" style="color:#8a97a3">📰 贸易日报</div><div class="t" style="color:#efe7d4">6月3日刊</div><div class="rib" style="background:#d9a441"></div></div>
+            <div class="bk" style="background:#1c1510;border:1px solid #6b5a2f"><div class="k" style="color:#c8a96b">📈 商情报</div><div class="t" style="color:#efe7d4">1550年6月</div><div class="rib" style="background:#d9a441"></div></div>
+            <div class="bk" style="background:#0f1718;border:1px solid #39434d"><div class="k" style="color:#8a97a3">📰 日报</div><div class="t" style="color:#efe7d4">6月2日刊</div><div class="rib" style="background:#e2724a"></div></div>
+          </div>
+          <div class="foot" style="color:#8a97a3">—— 书架 · 点封面翻开 ——</div>
+        </div>
+        <div class="cap">暗色书脊卡 + 金铜脊线; 与游戏整体 UI 同系, 违和感最低。</div>
+      </div>
+    </div>
+    <p class="note">基本沿用当前 <code>墨蓝浮层 + 金色标题</code> 的骨架, 只重排表头与行线、给封面加铜脊线 —— 对 <code>#60–#63</code> 里已写的排版影响最小、最稳。</p>
+  </div>
+
+  <p class="footp">你选哪一案? 我按它重定 SeaHud 情报站的 <b>色板常量 + 版面细节</b>(纸底/表线/封面色带), 再继续把《贸易日报》翻页、《全球商情报》表格、《我的订阅》书架写完整并编译。</p>
+</div>

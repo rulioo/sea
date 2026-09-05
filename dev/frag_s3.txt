@@ -1,0 +1,76 @@
+        // ---- 购买情报(泊港 + 现金 + 时效未过才卖; 每份当日/当月只卖一次) ----
+        // 成功即生成刊物并进"我的订阅"档案: 报纸含当日正文快照, 商情报留订阅记录、详情按最新行情重绘。
+        public SeaIntelSave IntelFind(string kind, int key)
+        {
+            for (int i = 0; i < IntelArchive.Count; i++)
+                if (IntelArchive[i] != null && IntelArchive[i].kind == kind && IntelArchive[i].key == key)
+                    return IntelArchive[i];
+            return null;
+        }
+        public SeaIntelSave IntelPaperTodayIssue() => IntelFind("paper", engine.Day);
+        public SeaIntelSave IntelReportMonthIssue() => IntelFind("report", IntelMonthKey());
+        public int IntelArchiveCount => IntelArchive.Count;
+
+        // 我的订阅封面列表: 新 → 旧
+        public List<SeaIntelSave> IntelArchiveNewestFirst()
+        {
+            var r = new List<SeaIntelSave>();
+            for (int i = IntelArchive.Count - 1; i >= 0; i--)
+                if (IntelArchive[i] != null) r.Add(IntelArchive[i]);
+            return r;
+        }
+
+        public SeaIntelSave IntelBuyPaper()
+        {
+            if (State != Mode.Docked) { Banner = "靠港停泊后才能买情报。"; return null; }
+            if (IntelPaperOwnedToday) { Banner = "今天的《" + IntelPaperName + "》已经买过 —— 新的一期明早出版。"; return null; }
+            if (fleet.Gold < IntelPaperCost) { Banner = "现金不足 " + Money(IntelPaperCost) + " 金, 买不起今天的" + IntelPaperName + "。"; return null; }
+            fleet.Gold -= IntelPaperCost;
+            var e = new SeaIntelSave
+            {
+                kind = "paper",
+                key = engine.Day,
+                title = IntelDateText(engine.Day),
+                sub = "刊价 " + IntelPaperCost + " 金 · 每日一刊 · 情报站监制",
+                paid = IntelPaperCost,
+                body = string.Join(IntelBlockSep, IntelPaperBlocks()),
+            };
+            IntelArchive.Add(e);
+            PushLog("购得《" + IntelPaperName + "》: " + e.title + " (" + Money(IntelPaperCost) + " 金), 收进我的订阅。");
+            Banner = "📰 今日《" + IntelPaperName + "》到手, 已收进《我的订阅》。";
+            return e;
+        }
+        public SeaIntelSave IntelBuyReport()
+        {
+            if (State != Mode.Docked) { Banner = "靠港停泊后才能订阅情报。"; return null; }
+            if (IntelReportMonthOwned) { Banner = "本月的《" + IntelReportName + "》已经订过。"; return null; }
+            if (fleet.Gold < IntelReportCost) { Banner = "现金不足 " + Money(IntelReportCost) + " 金, 订不起本月" + IntelReportName + "。"; return null; }
+            fleet.Gold -= IntelReportCost;
+            var e = new SeaIntelSave
+            {
+                kind = "report",
+                key = IntelMonthKey(),
+                title = IntelMonthLabel(IntelMonthKey()),
+                sub = "订阅价 " + IntelReportCost + " 金 · 当月行情一表观 · 含近期走势",
+                paid = IntelReportCost,
+                body = "",
+            };
+            IntelArchive.Add(e);
+            PushLog("订阅《" + IntelReportName + "》: " + e.title + " (" + Money(IntelReportCost) + " 金), 收进我的订阅。");
+            Banner = "📈 本月《" + IntelReportName + "》已订。";
+            return e;
+        }
+        public string IntelMonthLabel(int mk)
+        {
+            int y = mk / 12, m = mk % 12;
+            if (m == 0) { y--; m = 12; }
+            return y + " 年 " + m + " 月";
+        }
+        public static string IntelDateText(int d)
+        {
+            if (d < 0) return "……更早……";
+            int y = SimEngine.StartYear + d / SimEngine.DaysPerYear;
+            int m = (d % SimEngine.DaysPerYear) / 30 + 1;
+            int dd = d % 30 + 1;
+            return y + " 年 " + m + " 月 " + dd + " 日";
+        }

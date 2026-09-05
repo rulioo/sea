@@ -1,0 +1,23 @@
+        // 情报站(贸易日报 / 全球商情报 / 我的订阅)浮层: 大厅 / 我的订阅(封面墙) / 报纸翻页 / 商情报表格
+        GameObject _newsGo, _newsHome, _newsPaper, _newsReport, _newsSubs;
+        bool _newsOpen;
+        string _newsPage = "home";                  // 铺内当前页: home / subs / paper / report
+        Button _newsBuyBtn, _newsRptBtn, _newsSubsBtn;   // 大厅三档主按钮(购/阅 动态换字)
+        // 我的订阅(封面墙, 打开时重建)
+        RectTransform _subsRoot;
+        int _subsSig = -1;                          // 已渲染条数(变化才重建封面)
+        // 贸易日报(翻页报纸)
+        Text _paperMast, _paperSub, _paperBody, _paperFolio;
+        Button _paperPrev, _paperNext;
+        List<string> _paperPages = new List<string>();
+        int _paperIdx = 0;
+        string _paperSig = "";
+        Text _pageScratch;                          // 分页测量用(与正文同宽同字号)
+        float _pageW = 980f, _pageH = 408f;         // 报纸正文单页量度(与 vp/正文 Rect 对齐, 勿乱改)
+        // 全球商情报(地区 × 商品一张表)
+        Text _rptCap, _rptNote, _rptAreaLbl;
+        RectTransform _rptVp;                       // 表格滚动视窗
+        RectTransform _rptRows;                     // 表格内容容器(切地区时重建行)
+        int _rptArea = 0, _rptAreaN = 0;            // 当前看哪个航区
+        int _rptSig = -1;                           // (地区+航区数)重建印记
+        SeaIntelSave _openPaper, _openReport;       // 当前正在看的刊物

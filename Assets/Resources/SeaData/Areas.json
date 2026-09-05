@@ -1,0 +1,58 @@
+[
+  {
+    "id": "northSea",
+    "name": "北海·北欧",
+    "en": "Northern Europe",
+    "tier": "入门",
+    "desc": "波罗的海—北海。咸鱼、黄油、琥珀、羊毛与毛皮的产地；欧洲的餐桌与衣橱。"
+  },
+  {
+    "id": "med",
+    "name": "地中海·伊比利亚",
+    "en": "Mediterranean & Iberia",
+    "tier": "入门",
+    "desc": "旧世界的心脏。葡萄酒、橄榄油、玻璃器皿与东地中海的转口富庶之地。"
+  },
+  {
+    "id": "westAfrica",
+    "name": "西非·大西洋",
+    "en": "West Africa",
+    "tier": "中级",
+    "desc": "黄金海岸与象牙海岸，圣多美蔗糖，好望角是绕向印度洋的门闩。"
+  },
+  {
+    "id": "eastAfrica",
+    "name": "东非·红海",
+    "en": "East Africa & Red Sea",
+    "tier": "中级",
+    "desc": "象牙、乳香、黄金，还有也门摩卡的世界第一杯咖啡。"
+  },
+  {
+    "id": "india",
+    "name": "印度·波斯湾",
+    "en": "India & Persian Gulf",
+    "tier": "高级",
+    "desc": "胡椒海岸与科罗曼德布，靛蓝、宝石、檀香；白银在这里只嫌不够。"
+  },
+  {
+    "id": "seAsia",
+    "name": "东南亚",
+    "en": "Southeast Asia",
+    "tier": "高级",
+    "desc": "马六甲扼守东西咽喉，马鲁古的丁香与肉豆蔻是令欧洲疯狂的珍宝。"
+  },
+  {
+    "id": "eastAsia",
+    "name": "东亚",
+    "en": "East Asia",
+    "tier": "终极",
+    "desc": "丝绸、瓷器、茶叶与人参的故乡；整片东方海都渴求白银。"
+  },
+  {
+    "id": "newWorld",
+    "name": "新大陆·美洲与加勒比",
+    "en": "The New World",
+    "tier": "中级",
+    "desc": "糖与烟草的乐园，波托西的白银和卡塔赫纳的祖母绿，等着被运回旧世界。"
+  }
+]

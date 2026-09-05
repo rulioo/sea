@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>MapPreview</AssemblyName>
+    <RootNamespace>Sea.MapPreview</RootNamespace>
+    <LangVersion>latest</LangVersion>
+  </PropertyGroup>
+
+  <!-- 世界地图生成器(纯 C#), 与 Unity 运行时同一份代码 -->
+  <ItemGroup>
+    <Compile Include="..\..\Assets\Scripts\Runtime\SeaMapGen.cs" />
+  </ItemGroup>
+
+  <!-- 港口真源 JSON 拷到输出, 供离屏校验/取点 -->
+  <ItemGroup>
+    <None Include="..\..\Assets\Resources\SeaData\Ports.json"
+          CopyToOutputDirectory="PreserveNewest"
+          Link="Data\Ports.json" />
+  </ItemGroup>
+
+</Project>

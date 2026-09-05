@@ -1,0 +1,126 @@
+        // 报纸"块"生成: 每块是一个可单独排上版面的小单元(晨报速递 / 各地区头 / 每港一段),
+        // 返回正文含 <size> 富文本(发刊那一刻的行情)。SeaHud 分页时按块堆排成报纸版面。
+        List<string> IntelPaperBlocks()
+        {
+            var blocks = new List<string>();
+            var en = engine; var goods = world.Goods; int G = goods.Count;
+            var sb = new System.Text.StringBuilder(512);
+            string lastArea = null;
+
+            void Line(string s) { sb.Append(s).Append('\n'); }
+            void Flush()
+            {
+                if (sb.Length > 0) { blocks.Add(sb.ToString()); sb.Length = 0; }
+            }
+
+            Line("<size=11><color=#7A5F33>行情随每笔买卖与时日流动 —— 本刊只反映发刊这一瞬。别家船东多半也买了同一份, 等你赶到, 便宜处未必还便宜。仅供参考, 出手从速。</color></size>");
+            Flush();
+
+            // 一) 逐货最贱产地(抄底坐标)
+            var bestAsk = new int[G]; var bestCity = new string[G];
+            for (int i = 0; i < G; i++) { bestAsk[i] = int.MaxValue; bestCity[i] = "—"; }
+            foreach (var p in world.Ports)
+            {
+                if (p.Blocked) continue;
+                for (int gi = 0; gi < G; gi++)
+                {
+                    var c = en.GetCell(p, goods[gi]);
+                    if (!c.Produced) continue;
+                    int a = en.AskPrice(p, goods[gi]);
+                    if (a >= 0 && a < bestAsk[gi]) { bestAsk[gi] = a; bestCity[gi] = p.Name; }
+                }
+            }
+
+            // 二) 候选: 可捡便宜的特产 / 被抢购的缺货
+            var prods = new List<IntelCand>();
+            var needs = new List<IntelCand>();
+            foreach (var p in world.Ports)
+            {
+                if (p.Blocked) continue;
+                for (int gi = 0; gi < G; gi++)
+                {
+                    var g = goods[gi];
+                    var c = en.GetCell(p, g);
+                    int a = en.AskPrice(p, g), b = en.BidPrice(p, g);
+                    if (c.Produced && a > 0)
+                        prods.Add(new IntelCand { City = p.Name, Good = g.Name, Ask = a, Stock = en.BuyStock(p, g) });
+                    if (c.Needed && b > 0 && bestAsk[gi] != int.MaxValue)
+                    {
+                        int m = b - bestAsk[gi];
+                        needs.Add(new IntelCand { City = p.Name, Good = g.Name, Bid = b, Depth = IntelDepth(p, g), Margin = m, Ask = bestAsk[gi] });
+                    }
+                }
+            }
+            prods.Sort((x, y) => x.Ask.CompareTo(y.Ask));
+            needs.Sort((x, y) => x.Margin != y.Margin ? y.Margin.CompareTo(x.Margin) : y.Bid.CompareTo(x.Bid));
+
+            // 晨报速递 · 一版
+            sb.Length = 0;
+            Line("<size=13><color=#1A4553><b>◆ 晨报速递 · 捡便宜(全市最低供货价 → 去哪进货)</b></color></size>");
+            int shown = Mathf.Min(5, prods.Count);
+            if (shown == 0) Line("<size=11><color=#7A5F33>  · 今日无够便宜的特产可捡。</color></size>");
+            for (int i = 0; i < shown; i++)
+                Line("<size=11>  · <color=#3C6B48>" + prods[i].City + "</color> <b>" + prods[i].Good + "</b>  供 <color=#9E4A24>" + prods[i].Ask + "</color> 金 · 存 " + prods[i].Stock + " 件</size>");
+            Flush();
+
+            sb.Length = 0;
+            Line("<size=13><color=#9E4A24><b>◆ 晨报速递 · 卖高价(卖出价 − 该货最低进价 → 去哪出手)</b></color></size>");
+            shown = Mathf.Min(5, needs.Count);
+            if (shown == 0) Line("<size=11><color=#7A5F33>  · 今日无特别抢手的缺货。</color></size>");
+            for (int i = 0; i < shown; i++)
+                Line("<size=11>  · 把 <b>" + needs[i].Good + "</b> 运去 <color=#9E4A24>" + needs[i].City + "</color>  求 <color=#3C6B48>" + needs[i].Bid + "</color> 金 · 约可收 " + needs[i].Depth + " 件 · 单件毛利约 <color=#9E4A24>" + needs[i].Margin + "</color> 金</size>");
+            Flush();
+
+            // 三) 分港行市: 按航区分段, 地区头 + 每港各成一块 → 版面整段排、可跨版续排
+            foreach (var p in world.Ports)
+            {
+                string an = p.Area != null ? p.Area.Name : "未知海域";
+                if (an != lastArea)
+                {
+                    Flush();
+                    sb.Length = 0;
+                    Line("<size=15><color=#1A4553><b>━━ " + an + " ━━</b></color></size>");
+                    lastArea = an;
+                }
+                if (p.Blocked)
+                {
+                    Line("<size=12><color=#A03A24><b>✖ " + p.Name + "</b> —— 大事件封锁, 今日停市。</color></size>");
+                    Flush();
+                    continue;
+                }
+                Line("<size=12><color=#1A4553><b>◆ " + p.Name + "</b>"
+                    + (p.Size >= 3 ? "  大港" : p.Size == 2 ? "  中港" : "  小港") + "</color></size>");
+                var specIdx = new List<int>();
+                for (int s = 0; s < (p.Specialties != null ? p.Specialties.Length : 0); s++)
+                {
+                    int gi = world.GoodIndex(p.Specialties[s]);
+                    if (gi >= 0) specIdx.Add(gi);
+                }
+                specIdx.Sort((x, y) => en.GetCell(p, goods[x]).R.CompareTo(en.GetCell(p, goods[y]).R));
+                for (int s = 0; s < specIdx.Count; s++)
+                {
+                    var g = goods[specIdx[s]];
+                    Line("<size=11>  <color=#3C6B48>● 特产</color> <b>" + g.Name + "</b>  供货 <color=#9E4A24>" + en.AskPrice(p, g) + "</color> 金 · 存量 " + en.BuyStock(p, g) + " 件</size>");
+                }
+                var impIdx = new List<int>();
+                for (int s = 0; s < (p.Imports != null ? p.Imports.Length : 0); s++)
+                {
+                    int gi = world.GoodIndex(p.Imports[s]);
+                    if (gi >= 0) impIdx.Add(gi);
+                }
+                impIdx.Sort((x, y) => en.GetCell(p, goods[y]).R.CompareTo(en.GetCell(p, goods[x]).R));
+                for (int s = 0; s < impIdx.Count; s++)
+                {
+                    var g = goods[impIdx[s]];
+                    Line("<size=11>  <color=#9E4A24>▲ 缺货</color> <b>" + g.Name + "</b>  求购 <color=#3C6B48>" + en.BidPrice(p, g) + "</color> 金 · 约可收 " + IntelDepth(p, g) + " 件</size>");
+                }
+                Flush();
+            }
+            return blocks;
+        }
+
+        sealed class IntelCand
+        {
+            public string City, Good;
+            public int Ask, Stock, Bid, Depth, Margin;
+        }

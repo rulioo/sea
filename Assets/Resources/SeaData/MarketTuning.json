@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "note": "经济模型全局旋钮。eq=目标价倍率(本地价/全球基准价), r=当下挂牌倍率。买价=基准价*r*1.0, 卖价=基准价*r*sellSpreadFactor。",
+
+  "sellSpreadFactor": 0.94,
+  "ratioRegressionPerDay": 0.1,
+  "priceRatioMin": 0.25,
+  "priceRatioMax": 3.0,
+
+  "specialtyEq": 0.6,
+  "specialtyNeededEq": 0.85,
+  "needNecessityEq": 1.4,
+  "needClothEq": 1.45,
+  "needMaterialEq": 1.3,
+  "needIndulgenceEq": 1.65,
+  "needLuxuryEq": 1.72,
+  "neutralEq": 0.98,
+
+  "buyRatioPushPerUnit": 0.006,
+  "sellRatioPushPerUnit": -0.008,
+
+  "eqDriftSigma": 0.005,
+  "eqMeanPull": 0.02,
+
+  "stock": {
+    "producerCapBySize": [36, 60, 90],
+    "otherCapBySize": [8, 14, 24],
+    "producerRestockPerDay": 0.35,
+    "otherRestockPerDay": 0.06
+  },
+
+  "seasonPremiumMul": {
+    "north":  [1.1, 1.3, 1.3, 1.12, 0.98, 0.95, 0.9, 0.92, 0.95, 1.05, 1.18, 1.3],
+    "temp":   [1.05, 1.18, 1.18, 1.08, 1.0, 0.98, 0.95, 0.98, 1.0, 1.06, 1.14, 1.2],
+    "tropic": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+    "tempS":  [0.98, 0.95, 0.98, 1.0, 1.06, 1.14, 1.2, 1.16, 1.08, 1.0, 0.98, 0.98]
+  }
+}

@@ -39,6 +39,9 @@ namespace Sea
         // 地图旗标(设置开关): 大本营黄旗 + 到过的城市红旗, 随存读档
         public bool flagsOn = true;
         public List<string> flagVisited = new List<string>();
+
+        // 黑雾遮罩: 已探明海图网格(位图→base64; 空 = 尚未探索 / 旧档)
+        public string fog = "";
     }
 
     [Serializable]

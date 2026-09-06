@@ -33,13 +33,23 @@ namespace Sea
         public static SeaRouteData Get(Port a, Port b)
         {
             if (a == null || b == null || a.Id == b.Id) return null;
-            string key = a.Id + ">" + b.Id;
-            SeaRouteData hit;
-            if (_cache.TryGetValue(key, out hit)) return hit;
-            var rd = Compute(a, b);
-            if (rd == null) return null;
-            if (_cache.Count > 256) _cache.Clear();   // 简单淘汰, 避免无限增长
-            _cache[key] = rd;
+            return Route(a.Lon, a.Lat, b.Lon, b.Lat, a.Id + ">" + b.Id);
+        }
+
+        // 通用"坐标航线": 任意起终点(港位或海上点)之间绕陆海路。
+        //   起终点各自"吸附"到最近海格后 A*, 折线两端精确落在传入坐标上
+        //   (泊港传港坐标 = 与旧 Get 一致; 海上抛锚续航 / 探索插旗点传海面坐标)。
+        //   key 仅作缓存键(同起终点传同 key 才命中; 传空 = 不缓存)。
+        public static SeaRouteData Route(double lonA, double latA, double lonB, double latB, string key)
+        {
+            Ensure();
+            if (!string.IsNullOrEmpty(key) && _cache.TryGetValue(key, out var hit)) return hit;
+            var rd = ComputeCoords(lonA, latA, lonB, latB);
+            if (rd != null && !string.IsNullOrEmpty(key))
+            {
+                if (_cache.Count > 256) _cache.Clear();   // 简单淘汰, 避免无限增长
+                _cache[key] = rd;
+            }
             return rd;
         }
 
@@ -95,19 +105,19 @@ namespace Sea
             return best;
         }
 
-        static SeaRouteData Compute(Port a, Port b)
+        static SeaRouteData ComputeCoords(double lonA, double latA, double lonB, double latB)
         {
             Ensure();
-            int sa = SnapCell(a.Lon, a.Lat);
-            int sb = SnapCell(b.Lon, b.Lat);
-            var rd = new SeaRouteData { FromId = a.Id, ToId = b.Id };
-            rd.Span = DistDeg(a.Lon, a.Lat, b.Lon, b.Lat);
+            int sa = SnapCell(lonA, latA);
+            int sb = SnapCell(lonB, latB);
+            var rd = new SeaRouteData();
+            rd.Span = DistDeg(lonA, latA, lonB, latB);
 
             // 兜底: 吸不到海格(极窄水道异常) → 直线海路
             if (sa < 0 || sb < 0)
             {
-                rd.Pts.Add(new Vector3(a.Lon, 0f, -a.Lat));
-                rd.Pts.Add(new Vector3(b.Lon, 0f, -b.Lat));
+                rd.Pts.Add(new Vector3((float)lonA, 0f, (float)-latA));
+                rd.Pts.Add(new Vector3((float)lonB, 0f, (float)-latB));
                 rd.Total = rd.Span;
                 return rd;
             }
@@ -122,15 +132,15 @@ namespace Sea
                 cells = Astar(sa, sb);
                 if (cells == null)   // 找不到海路(理论不发生) → 直线兜底
                 {
-                    rd.Pts.Add(new Vector3(a.Lon, 0f, -a.Lat));
-                    rd.Pts.Add(new Vector3(b.Lon, 0f, -b.Lat));
+                    rd.Pts.Add(new Vector3((float)lonA, 0f, (float)-latA));
+                    rd.Pts.Add(new Vector3((float)lonB, 0f, (float)-latB));
                     rd.Total = rd.Span;
                     return rd;
                 }
             }
 
-            // 折线 = 起港 → 途经海格中心 → 终港
-            rd.Pts.Add(new Vector3(a.Lon, 0f, -a.Lat));
+            // 折线 = 起点 → 途经海格中心 → 终点
+            rd.Pts.Add(new Vector3((float)lonA, 0f, (float)-latA));
             for (int i = 0; i < cells.Count; i++)
             {
                 int c = cells[i];
@@ -140,7 +150,7 @@ namespace Sea
                     0f,
                     (float)-(SeaMapGen.Lat0 + (y + 0.5) * Step)));
             }
-            rd.Pts.Add(new Vector3(b.Lon, 0f, -b.Lat));
+            rd.Pts.Add(new Vector3((float)lonB, 0f, (float)-latB));
 
             // 去掉明显共线的中间点(直线走直, 转弯保留), 让航行轨迹干净
             Compress(rd.Pts);

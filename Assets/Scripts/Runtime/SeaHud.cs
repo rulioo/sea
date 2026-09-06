@@ -55,6 +55,7 @@ namespace Sea
                             _tCost = new List<Text>();   // 成本 = 持仓平均成本/件
         readonly List<Button[]> _buy = new List<Button[]>();    // 每行 [买1, 买10, 全买]
         readonly List<Button[]> _sell = new List<Button[]>();   // 每行 [卖1, 卖10, 全卖]
+        readonly List<Text[]> _sellLbl = new List<Text[]>();    // 与 _sell 平行: 每键上的"卖1/卖10/全卖"字(无持仓时改暗淡, 别再亮白)
         // 行情行高亮: 每行一条透明感应带(悬停微亮 / 点选那行金亮, 避免误操作) —— 感应带排在按钮之下
         readonly List<Image> _rowBand = new List<Image>();
         readonly List<RectTransform> _rowRt = new List<RectTransform>();
@@ -73,14 +74,20 @@ namespace Sea
         // 我的订阅(封面墙, 打开时重建)
         RectTransform _subsRoot;
         int _subsSig = -1;                          // 已渲染条数(变化才重建封面)
-        // 贸易日报(翻页报纸)
-        Text _paperMast, _paperSub, _paperBody, _paperFolio;
+        // 贸易日报(翻页报纸): 第1版 = 晨报速递整版(单栏通栏), 第2版起 = 分港行市 每版 4 栏 × 每栏至多 3 城
+        Text[] _paperCols;                          // 分栏正文(至多 4 栏并排, 蒙版裁切; 头版只启用第0栏并拉通到整幅宽)
+        Text _paperFolio;                           // 底部刊脚(报名 · 期日 · 版次)
         Button _paperPrev, _paperNext;
-        List<string> _paperPages = new List<string>();
+        List<string[]> _paperColPages = new List<string[]>();  // 每页各栏文本(page[c], c < 该页实际栏数 _paperColN[i])
+        List<int> _paperColN = new List<int>();     // 与 _paperColPages 平行: 每页实际栏数(头版=1, 行市版=4)
+        List<int> _paperFonts = new List<int>();    // 与 _paperColPages 平行: 每版整版统一字号(测高=渲染同字号)
         int _paperIdx = 0;
-        string _paperSig = "";
-        Text _pageScratch;                          // 分页测量用(与正文同宽同字号)
-        float _pageW = 980f, _pageH = 408f;         // 报纸正文单页量度(与 vp/正文 Rect 对齐, 勿乱改)
+        string _paperSig = "", _paperIssue = "";    // 正文快照 / 底部刊脚期日
+        float _pageW = 980f, _pageH = 408f;                  // 版面量度: 整幅宽 / 每版高(栏宽按页栏数实时算, 见 ColWidthFor)
+        const int PaperCols = 4;                    // 行市版固定 4 栏(每版 8 城平衡铺开, 一栏 2 城)
+        const float PaperGap = 12f;                 // 栏沟(头版单栏无沟)
+        const float PaperHeadLead = 1f;             // 头版(晨报速递)行距(行间纵向间隔倍数)
+        const float PaperMarketLead = 1.30f;        // 行市版(第2版起)行距: 供需各行上下间隔加宽, 城市块更好扫读
         // 全球商情报(地区 × 商品一张表)
         Text _rptCap, _rptNote, _rptAreaLbl;
         RectTransform _rptVp;                       // 表格滚动视窗
@@ -170,6 +177,7 @@ namespace Sea
                 if (_confirmGo != null && _confirmGo.activeSelf) return true;
                 if (_departGo != null && _departGo.activeSelf) return true;
                 if (_newsGo != null && _newsGo.activeSelf) return true;
+                if (play != null && play.SettingsOpen) return true;   // 设置弹层也算顶层: 藏地名 + 停地图输入
                 return false;
             }
         }
@@ -180,6 +188,7 @@ namespace Sea
             if (!_built) BuildAll();
             Refresh();
         }
+
 
         // =============================================================
         // 搭建
@@ -562,7 +571,7 @@ namespace Sea
 
         void ConfirmProvision(int nDays)
         {
-            if (play.State != SeaPlay.Mode.Docked) { play.Banner = "航行中不能补给 —— 先靠港。"; return; }
+            if (play.State != SeaPlay.Mode.Docked) { play.Banner = "补给给养得靠港 —— 现在在海上(航行或抛锚)不行, 先驶回一座城。"; return; }
             var lines = play.ProvisionLines(nDays);
             if (lines.Count == 0) { play.Banner = "给养已够, 暂无需补给。"; return; }
             var sb = new StringBuilder(360);
@@ -584,9 +593,9 @@ namespace Sea
 
         void ConfirmRecruit()
         {
-            if (play.State != SeaPlay.Mode.Docked) { play.Banner = "航行中不能招募水手 —— 先靠港。"; return; }
+            if (play.State != SeaPlay.Mode.Docked) { play.Banner = "招募水手得靠港 —— 现在在海上(航行或抛锚)不行, 先驶回一座城。"; return; }
             long cost = play.RecruitCostToFull();
-            if (cost < 0) { play.Banner = "航行中不能招募水手 —— 先靠港。"; return; }
+            if (cost < 0) { play.Banner = "招募水手得靠港 —— 现在在海上(航行或抛锚)不行, 先驶回一座城。"; return; }
             if (cost == 0) { play.Banner = "水手已经满编, 无需招募。"; return; }
             AskConfirm("<b><color=#FFD76A>招募水手补齐</color></b>\n在码头把全舰队水手招满(旗舰 + 僚舰)。\n预计花费: <color=#FFD76A>" + Money(cost) + "</color> 金。",
                 () => play.RecruitCrewFull());
@@ -595,7 +604,7 @@ namespace Sea
         // 休整 10 日: 同"花金确认"流程 —— 先把"这会花掉什么/错过什么"讲清楚, 玩家点头才拨时间
         void ConfirmRest()
         {
-            if (play.State != SeaPlay.Mode.Docked) { play.Banner = "航行中不能休整 —— 先靠港。"; return; }
+            if (play.State != SeaPlay.Mode.Docked) { play.Banner = "休整得靠港 —— 现在不在港内(海上抛锚/航行), 先驶回一座城。"; return; }
             string port = play.Current != null ? play.Current.Name : "本港";
             AskConfirm("<b><color=#FFD76A>休整 10 日</color></b>\n让全舰队在 " + port + " 停靠休整, 把日子拨快 10 天:\n"
                 + "· 这 10 天各地行情 / 库存照常流转 ——\n  可能错过正在涨的差价窗口, 也可能赶上新到货;\n"
@@ -653,7 +662,7 @@ namespace Sea
 
         void OpenDepartCheck()
         {
-            if (play == null || play.State != SeaPlay.Mode.Docked || play.Dest == null) return;
+            if (play == null || play.State == SeaPlay.Mode.Sailing || !play.HasSailTarget) return;
             FoldFloats(true);   // 出航检查当最高层, 行情/舰队/船坞/情报站/确认 全收掉, 不重叠
             _departBody.text = DepartReviewText();
             _departOpen = true;
@@ -667,19 +676,23 @@ namespace Sea
 
         string DepartReviewText()
         {
-            var cur = play.Current; var dst = play.Dest;
-            if (cur == null || dst == null || play.fleet == null) return "";
-            int days = play.TravelDays(cur, dst);
+            if (play.fleet == null || !play.HasSailTarget) return "";
+            bool fromPort = play.State == SeaPlay.Mode.Docked && play.Current != null;
+            string fromName = fromPort ? play.Current.Name : "海上锚地(🚩)";
+            bool toPort = play.Dest != null;
+            string toName = toPort ? play.Dest.Name + " · " + play.Dest.Area.Name : "海图 🚩 目标点(抛锚)";
+            int days = play.TargetDays;
             int crew = play.TotalSailors;
             int cmin = FleetCrewMin(), cmax = FleetCrewMax();
             int endu = play.EnduranceDays;
             var sb = new StringBuilder(360);
-            sb.Append("<size=14><color=#FFD76A>").Append(cur.Name).Append("  →  ").Append(dst.Name)
+            sb.Append("<size=14><color=#FFD76A>").Append(fromName).Append("  →  ").Append(toName)
               .Append("   · 约 ").Append(days).Append(" 日航程</color></size>\n");
             sb.Append("<b>水手</b> ").Append(crew).Append(" 人 · 全队下限 ").Append(cmin).Append(" · 满载 ").Append(cmax);
             sb.Append(crew < cmin ? "   <color=#FF7766>⚠ 低于下限, 开船吃力</color>\n" : "   <color=#BFE0B0>✓ 够开船</color>\n");
             sb.Append("<b>给养续航</b> 全队可撑 <color=#FFD76A>").Append(endu).Append("</color> 日");
-            sb.Append(endu < days ? "   <color=#FF7766>⚠ 不足 " + days + " 日, 途中会断粮减员!</color>\n" : "   <color=#BFE0B0>✓ 够撑到港</color>\n");
+            sb.Append(endu < days ? "   <color=#FF7766>⚠ 不足 " + days + " 日, 途中会断粮减员!</color>\n"
+                                  : "   <color=#BFE0B0>✓ 够撑到目的地</color>\n");
             sb.Append("<b>货舱</b> 装货 ").Append(play.CargoWeight()).Append(" + 给养 ").Append(play.ProvWeight())
               .Append(" / 总载 ").Append(play.TotalCapacity()).Append("  (空舱位 ").Append(Math.Max(0, play.FreeLoad())).Append(")\n");
             // 逐样提醒船上货物
@@ -694,7 +707,9 @@ namespace Sea
                 k++;
             }
             if (k == 0) sb.Append("  (空舱出航)");
-            sb.Append("\n\n<color=#8FA8C2>确认后即正式出航。航行中按天吃给养、到港才结工资; 断粮会士气崩、人也会没。</color>");
+            sb.Append("\n\n<color=#8FA8C2>确认后即起锚。航行中按天吃给养、到港才结工资; 断粮会士气崩、人也会没。");
+            if (!toPort) sb.Append("\n🚩 这趟不去城: 到点只抛锚停船, 想买卖/补给得再驶回一座城。");
+            sb.Append("</color>");
             return sb.ToString();
         }
 
@@ -1330,11 +1345,11 @@ namespace Sea
             var hb = Panel("hdr", parent, new Color(0.10f, 0.16f, 0.22f, 0.55f));
             RectAt(Rt(hb), new Vector2(0, 1), new Vector2(1, 1), new Vector2(0.5f, 1), new Vector2(2, -36), new Vector2(-4, 26));
             for (int c = 0; c < cn.Length; c++)
-                HeaderCell(parent, cn[c], cx[c] + InsetX, cw[c], ca[c], 13, ColDim);
-            // 买 / 卖三键组(数据列最右止于 516, 留 ~14 空隙再接按钮)
+                HeaderCell(parent, cn[c], cx[c] + InsetX, cw[c], ca[c], 13, c == 4 ? ColGold : ColDim);   // 持有 列头金黄
+            // 买 / 卖三键组(数据列最右止于 516, 留 ~14 空隙再接按钮); 金黄=买入, 青=卖出(与键色对换后一致)
             const float BuyX = 530f, SellX = 706f;
-            HeaderCell(parent, "买 入", BuyX + InsetX, 170f, TextAnchor.MiddleCenter, 13, new Color(0.70f, 0.92f, 1f));
-            HeaderCell(parent, "卖 出", SellX + InsetX, 170f, TextAnchor.MiddleCenter, 13, ColTitle);
+            HeaderCell(parent, "买 入", BuyX + InsetX, 170f, TextAnchor.MiddleCenter, 13, ColTitle);
+            HeaderCell(parent, "卖 出", SellX + InsetX, 170f, TextAnchor.MiddleCenter, 13, new Color(0.70f, 0.92f, 1f));
 
             // 滚动区
             var vpGo = Panel("vp", parent, new Color(0, 0, 0, 0.22f));
@@ -1381,7 +1396,7 @@ namespace Sea
                 var ak = RowCell(row, "", 15, Color.white, TextAnchor.MiddleRight, cx[1], cw[1]);
                 var bd = RowCell(row, "", 15, Color.white, TextAnchor.MiddleRight, cx[2], cw[2]);
                 var cs = RowCell(row, "", 14, ColDim, TextAnchor.MiddleRight, cx[3], cw[3]);
-                var hd = RowCell(row, "", 14, ColTxt, TextAnchor.MiddleRight, cx[4], cw[4]);
+                var hd = RowCell(row, "", 14, ColGold, TextAnchor.MiddleRight, cx[4], cw[4]);   // 持有数 金黄
                 var st = RowCell(row, "", 13, ColDim, TextAnchor.MiddleRight, cx[5], cw[5]);
                 _tName.Add(nm); _tAsk.Add(ak); _tBid.Add(bd); _tCost.Add(cs); _tHold.Add(hd); _tStock.Add(st);
 
@@ -1391,7 +1406,7 @@ namespace Sea
                 {
                     int qty = b == 0 ? 1 : (b == 1 ? 10 : int.MaxValue);
                     var btn = MakeBtn(row, "b" + i + "_" + b, b == 0 ? "买1" : (b == 1 ? "买10" : "全买"),
-                        13, ColBtn, Color.white, clickSfx: false);
+                        13, ColGoldBtn, new Color(0.15f, 0.09f, 0.04f), clickSfx: false);
                     PlaceRowButton(btn, BuyX + b * 58f);
                     var gg = g; var q = qty; int ri = i;
                     btn.onClick.AddListener(() => { _selRow = ri; play.BuyGood(gg, q); });
@@ -1399,17 +1414,19 @@ namespace Sea
                 }
                 // 卖 1 / 卖 10 / 全清
                 var sells = new Button[3];
+                var sellLbls = new Text[3];
                 for (int s = 0; s < 3; s++)
                 {
                     int qty = s == 0 ? 1 : (s == 1 ? 10 : int.MaxValue);
                     var btn = MakeBtn(row, "s" + i + "_" + s, s == 0 ? "卖1" : (s == 1 ? "卖10" : "全卖"),
-                        13, ColGoldBtn, new Color(0.15f, 0.09f, 0.04f), clickSfx: false);
+                        13, ColBtn, Color.white, clickSfx: false);
                     PlaceRowButton(btn, SellX + s * 58f);
                     var gg = g; var q = qty; int si = i;
                     btn.onClick.AddListener(() => { _selRow = si; play.SellGood(gg, q); });
                     sells[s] = btn;
+                    sellLbls[s] = btn.GetComponentInChildren<Text>();   // 留住字色引用: 无持仓时整键转暗淡
                 }
-                _buy.Add(buys); _sell.Add(sells);
+                _buy.Add(buys); _sell.Add(sells); _sellLbl.Add(sellLbls);
                 i++;
             }
         }
@@ -1579,11 +1596,13 @@ namespace Sea
             // --- 日志(带日期、可滚动翻看历史) ---
             RefreshLog();
 
-            // --- 泊港 / 航行 切换 ---
-            bool docked = st == SeaPlay.Mode.Docked;
-            _dockGo.SetActive(docked);
-            _sailGo.SetActive(!docked);
-            if (docked) RefreshDock();
+            // --- 停泊(泊港 / 海上抛锚同一条底操作条) ⇄ 航行 切换 ---
+            bool docked = st == SeaPlay.Mode.Docked;     // 真·在港: 买卖/船坞/情报/休整才可用
+            bool sailing = st == SeaPlay.Mode.Sailing;
+            bool stopped = !sailing;                     // 泊港或抛锚都能选目标 → 出航
+            _dockGo.SetActive(stopped);
+            _sailGo.SetActive(sailing);
+            if (stopped) RefreshDock();
             else { RefreshSail(); _yardOpen = false; }   // 一离港船坞就关
 
             // --- 舰队情况(浮层; 泊港/航行都能看; 到新港自动弹行情时让位) ---
@@ -1616,9 +1635,9 @@ namespace Sea
             if (_holdGo != null) _holdGo.SetActive(docked && _tradeOpen);
             if (docked && _tradeOpen && _holdBody != null) RefreshHold();
 
-            // --- 出航前检查(顶层浮层; 一旦离港/换状态即收起) ---
-            if (!docked) _departOpen = false;
-            _departGo.SetActive(docked && _departOpen);
+            // --- 出航前检查(顶层浮层; 一旦起航/换状态即收起) ---
+            if (sailing) _departOpen = false;
+            _departGo.SetActive(stopped && _departOpen);
 
             // --- 横幅 ---
             if (!string.IsNullOrEmpty(play.Banner))
@@ -1642,7 +1661,10 @@ namespace Sea
         {
             var sb = new StringBuilder(220);
             var cur = play.Current;
-            string portLine = cur != null ? cur.Name + " · " + cur.Area.Name : "航行中";
+            string portLine;
+            if (play.State == SeaPlay.Mode.Docked) portLine = cur != null ? cur.Name + " · " + cur.Area.Name : "—";
+            else if (play.State == SeaPlay.Mode.Anchored) portLine = "海上 🚩 抛锚";
+            else portLine = "航行中";
             sb.Append("<size=15><color=#FFD76A>💰 现金 ").Append(Money(play.Cash)).Append("</color></size>\n");
             sb.Append(play.engine.Year).Append(" 年 ").Append(play.engine.Month).Append(" 月 ").Append(play.engine.DayOfMonth).Append(" 日  ·  ").Append(portLine).Append("\n");
             int cap = play.TotalCapacity();
@@ -1656,22 +1678,41 @@ namespace Sea
 
         void RefreshDock()
         {
-            // 按钮可用性
-            _dock["depart"].interactable = play.Dest != null;
+            // 港口专属动作(行情/休整/船坞/情报)只有真在港才可用; 海上抛锚停着仍能选目标出航
+            bool port = play.State == SeaPlay.Mode.Docked;
+            _dock["market"].interactable = port;
+            _dock["rest"].interactable = port;
+            _dock["yard"].interactable = port;
+            _dock["intel"].interactable = port;
+
+            // 出航: 选中一座城 或 海面插旗点 都能出航
+            _dock["depart"].interactable = play.HasSailTarget;
+
             var cap = _dock["market"].GetComponentInChildren<Text>();
-            if (cap != null) cap.text = _tradeOpen ? "收起行情" : "本港行情 ◈";
+            if (cap != null) cap.text = port ? (_tradeOpen ? "收起行情" : "本港行情 ◈") : "本港行情 ◈";
 
             string g;
-            if (play.Dest == null)
+            if (play.Dest != null)
+            {
+                int n = play.TargetDays;
+                g = "目标: <color=#FFD76A>" + play.Dest.Name + " · " + play.Dest.Area.Name + "</color> · 约 " + n
+                  + " 日航程 —— 给养够吗? 不够进左下 <color=#7FE0FF>⚓ 舰队</color> 补给, 然后按 <color=#FFD76A>出航 ▶</color>。";
+            }
+            else if (play.ExploreSet)
+            {
+                int n = play.TargetDays;
+                g = "<color=#FF7766>🚩 探索目标</color>: 海图上插旗那处(非港口) · 约 " + n
+                  + " 日航程, 到点抛锚。按 <color=#FFD76A>出航 ▶</color> 驶去; 点别处海面可挪旗, 点发光圆球则改去那座城。";
+            }
+            else if (port)
             {
                 g = _tradeOpen
                     ? "这是 <color=#FFD76A>" + play.Current.Name + "</color> 的行情: 绿色 ◆ = 本地盛产便宜。买 / 卖分栏各有 <color=#7FE0FF>1件 · 10件 · 全仓</color> 三键 —— 行情看够了点右上 <color=#7FE0FF>✕</color> 收起。"
-                    : "点海图上任意一颗 <color=#7FE0FF>发光圆球</color>(另一个港口)把它设为目标 —— 设好后这里会亮起金色 <color=#FFD76A>出航</color>。想先看本地买卖? 点 <color=#FFD76A>本港行情</color>; 招水手 / 补给给养 / 看货舱都在左下 <color=#7FE0FF>⚓ 舰队</color>。";
+                    : "点海图上任意一颗 <color=#7FE0FF>发光圆球</color>(另一座城)设为航行目标; 或点任意一处<color=#FF7766>海面</color>插 <color=#FF7766>🚩 红旗</color> 自由探索(不靠港、到点抛锚) —— 设好后这里亮起金色 <color=#FFD76A>出航 ▶</color>。想先看本地买卖? 点 <color=#FFD76A>本港行情</color>。";
             }
             else
             {
-                int n = play.TravelDays(play.Current, play.Dest);
-                g = "目标: <color=#FFD76A>" + play.Dest.Name + " · " + play.Dest.Area.Name + "</color> · 约 " + n + " 日航程 —— 给养够吗? 不够进左下 <color=#7FE0FF>⚓ 舰队</color> 补给, 然后按 <color=#FFD76A>出航 ▶</color>。";
+                g = "船在海上<color=#FF7766>抛锚</color>, 此处 <color=#FF7766>🚩 红旗</color> 就是船所在。点一座<color=#7FE0FF>发光圆球</color>(城市)驶去做买卖/补给, 或点一处<color=#FF7766>海面</color>插新旗继续自由探索 —— 然后按 <color=#FFD76A>出航 ▶</color>。";
             }
             SetGuide(g);
         }
@@ -1688,7 +1729,7 @@ namespace Sea
         void RefreshSail()
         {
             float pr = Mathf.Clamp01(play.SailProgress01);
-            string dName = play.Dest != null ? play.Dest.Name : "??";
+            string dName = play.Dest != null ? play.Dest.Name : (play.ExploreSet ? "海图 🚩 目标点" : "??");
             if (_sailTitle != null)
                 _sailTitle.text = "驶向 " + dName + " · 第 " + play.DaysDone + " / " + play.PlannedDays + " 日";
             if (_sailBar != null)
@@ -1724,7 +1765,7 @@ namespace Sea
                 // 成本 = 自己持仓的买入均价(方便算利润); 没持仓 / 账本缺记录 → "—"
                 int avg = hold > 0 ? play.AvgHoldCost(g.Id) : -1;
                 _tCost[i].text = avg >= 0 ? avg.ToString() : "—";
-                _tCost[i].color = avg >= 0 ? new Color(0.96f, 0.84f, 0.55f) : ColDim;
+                _tCost[i].color = avg >= 0 ? Color.white : ColDim;   // 成本数用白色(与买/卖价中性色一致, 不再偏暖金)
                 bool produced = Contains(cur.Specialties, g.Id);
                 bool imported = Contains(cur.Imports, g.Id);
                 _tName[i].color = produced ? ColProd : imported ? ColImpo : ColTxt;
@@ -1739,7 +1780,17 @@ namespace Sea
                 if (i < _sell.Count)
                 {
                     bool canSell = hold > 0;
-                    for (int s = 0; s < _sell[i].Length; s++) _sell[i][s].interactable = canSell;
+                    for (int s = 0; s < _sell[i].Length; s++)
+                    {
+                        _sell[i][s].interactable = canSell;
+                        // 没持仓的货: 卖出键不只置灰底, 键字也转暗淡 —— 不再一片亮白诱人误点
+                        var lb = (i < _sellLbl.Count && s < _sellLbl[i].Length) ? _sellLbl[i][s] : null;
+                        if (lb != null)
+                        {
+                            Color want = canSell ? Color.white : new Color(0.45f, 0.52f, 0.60f, 0.85f);
+                            if (lb.color != want) lb.color = want;
+                        }
+                    }
                 }
             }
             RefreshRowHighlights();
@@ -1818,8 +1869,8 @@ namespace Sea
                 bool behind = sp.z < 0.1f;
                 bool cursorNear = !behind && Vector2.Distance(new Vector2(sp.x, sp.y), mouse) < 52f;
                 // 浮层(行情/舰队/确认/出航检查)开着 → 所有地名全隐藏(本港/目标/悬停都不出现);
-                // 平时: 当前港 / 目标港 / 鼠标近处 / 大港 常显。
-                bool show = !anyOpen && !behind && (curId == p.Id || destId == p.Id || cursorNear || p.Size >= 3);
+                // 平时: 当前港 / 目标港 / 鼠标近处 / 大港 常显 —— 但一律还要过了黑雾闸: 未探明的港连名字都不露。
+                bool show = !anyOpen && !behind && play.CityRevealed(p) && (curId == p.Id || destId == p.Id || cursorNear || p.Size >= 3);
                 var rr = Rt(lb.gameObject);
                 rr.anchoredPosition = new Vector2(sp.x / scale, sp.y / scale + 15f);   // 固定 +15px → 名字恒在光球顶上方不叠字
                 lb.color = curId == p.Id ? new Color(1f, 0.9f, 0.5f) : destId == p.Id ? new Color(1f, 1f, 1f) : play.PortColor(p);
@@ -1897,13 +1948,13 @@ namespace Sea
             var win = Panel("win", _newsGo.transform, P_parch);
             RectAt(Rt(win), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f),
                 new Vector2(0f, 4f), new Vector2(1040f, 600f));
-            // 顶上一条红蜡封条 + 墨绿刊名
+            // 顶上一条红蜡封条; 绘图房名号不占报头, 挪到本窗左下角当一行小注(建页后置顶, 见下)
             var seal = Panel("seal", win.transform, P_rust);
             RectAt(Rt(seal), new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(0.5f, 1f),
                 new Vector2(0f, -1f), new Vector2(0f, 4f));
-            var cap = AddText(win.transform, "情报站 · 绘图房的消息案", 18, P_navy, TextAnchor.UpperLeft);
-            RectAt(Rt(cap.gameObject), new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(0f, 1f),
-                new Vector2(18f, -12f), new Vector2(660f, 28f));
+            var cap = AddText(win.transform, "情报站 · 绘图房的消息案", 12, P_soft, TextAnchor.MiddleLeft);
+            RectAt(Rt(cap.gameObject), new Vector2(0f, 0f), new Vector2(0f, 0f), new Vector2(0f, 0f),
+                new Vector2(16f, 6f), new Vector2(320f, 18f));
             var close = MakeBtn(win.transform, "close", "✕", 15, P_bronze, P_btnTx);
             RectAt(Rt(close.gameObject), new Vector2(1f, 1f), new Vector2(1f, 1f), new Vector2(1f, 1f),
                 new Vector2(-14f, -8f), new Vector2(42f, 38f));
@@ -1918,6 +1969,7 @@ namespace Sea
             BuildNewsReport(_newsReport.transform);
             BuildNewsSubs(_newsSubs.transform);
             ApplyNewsPage();
+            cap.transform.SetAsLastSibling();   // 左下角小注浮在所有纸页之上(该角落无正文)
             _newsGo.SetActive(false);
         }
 
@@ -1927,7 +1979,8 @@ namespace Sea
             p.transform.SetParent(win, false);
             var r = (RectTransform)p.transform;
             r.anchorMin = new Vector2(0f, 0f); r.anchorMax = new Vector2(1f, 1f);
-            r.offsetMin = new Vector2(16f, 12f); r.offsetMax = new Vector2(-16f, -50f);
+            r.offsetMin = new Vector2(16f, 26f); r.offsetMax = new Vector2(-16f, -50f);
+            // 底边留 26px 给窗口左下角那行「绘图房消息案」小注(纸张内容不与之相碰)
             return p;
         }
 
@@ -2161,101 +2214,308 @@ namespace Sea
             RectAt(Rt(back.gameObject), new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(0f, 1f),
                 new Vector2(8f, -6f), new Vector2(100f, 32f));
             back.onClick.AddListener(ShowNewsHome);
-            _paperMast = AddText(paper.transform, "", 30, P_navy, TextAnchor.MiddleCenter);
-            RectAt(Rt(_paperMast.gameObject), new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(0.5f, 1f),
-                new Vector2(0f, -6f), new Vector2(0f, 40f));
-            var mrule = Panel("mrule", paper.transform, P_rule);
-            RectAt(Rt(mrule), new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(0.5f, 1f),
-                new Vector2(0f, -50f), new Vector2(0f, 1f));
-            _paperSub = AddText(paper.transform, "", 13, P_soft, TextAnchor.MiddleCenter);
-            RectAt(Rt(_paperSub.gameObject), new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(0.5f, 1f),
-                new Vector2(0f, -60f), new Vector2(0f, 22f));
+            // 版面量度: 整幅宽 / 每版高(略小于 vp 裁口, 防裁字); 栏宽随页栏数算(头版单栏 = 整幅, 行市版 4 栏 = 窄栏)
+            _pageW = 980f; _pageH = 408f;
 
-            // 版面主体: 羊皮纸刊页, 蒙版裁切(一版一版翻, 不用滚)
+            // 版面主体: 羊皮纸刊页, 蒙版裁切(一版一版翻, 不用滚)。顶部整幅让给正文,
+            // 报名/期日不再浮在每版顶部, 而是随"刊脚"压在报纸最下方。
             var vpGo = Panel("body", paper.transform, P_sheet);
             var vp = Rt(vpGo);
             vp.anchorMin = Vector2.zero; vp.anchorMax = Vector2.one;
-            vp.offsetMin = new Vector2(10f, 48f); vp.offsetMax = new Vector2(-10f, -88f);
+            vp.offsetMin = new Vector2(6f, 68f); vp.offsetMax = new Vector2(-6f, -44f);
             vpGo.AddComponent<Mask>().showMaskGraphic = false;
-            _paperBody = AddText(vpGo.transform, "", 12, P_ink, TextAnchor.UpperLeft);
-            var bt = Rt(_paperBody.gameObject);
-            bt.anchorMin = new Vector2(0f, 1f); bt.anchorMax = new Vector2(0f, 1f);
-            bt.pivot = new Vector2(0f, 1f);
-            bt.anchoredPosition = Vector2.zero;
-            bt.sizeDelta = new Vector2(_pageW, 4000f);
+
+            // 正文栏: 栏间留浅沟、不画任何竖线。建 4 栏并排, 每版翻到时再按该版栏数重排几何(头版 1 栏拉通, 行市版 4 栏)。
+            _paperCols = new Text[PaperCols];
+            float cw0 = ColWidthFor(PaperCols);
+            for (int c = 0; c < PaperCols; c++)
+            {
+                var col = AddText(vpGo.transform, "", 12, P_ink, TextAnchor.UpperLeft);
+                RectAt(Rt(col.gameObject), new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(0f, 1f),
+                    new Vector2(6f + c * (cw0 + PaperGap), 0f), new Vector2(cw0, _pageH));
+                _paperCols[c] = col;
+            }
+
+            // 报纸最下方刊脚: 《贸易日报》 · 期日 · 第 X/N 版(随翻版更新)
+            _paperFolio = AddText(paper.transform, "", 13, P_rust, TextAnchor.MiddleCenter);
+            RectAt(Rt(_paperFolio.gameObject), new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(0.5f, 0f),
+                new Vector2(0f, 44f), new Vector2(0f, 20f));
 
             _paperPrev = MakeBtn(paper.transform, "prev", "◀ 上一版", 13, P_bronze, P_btnTx);
             RectAt(Rt(_paperPrev.gameObject), new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(0.5f, 0f),
-                new Vector2(-160f, 8f), new Vector2(120f, 30f));
+                new Vector2(-158f, 8f), new Vector2(120f, 30f));
             _paperPrev.onClick.AddListener(() => PaperGo(-1));
-            _paperFolio = AddText(paper.transform, "", 13, P_rust, TextAnchor.MiddleCenter);
-            RectAt(Rt(_paperFolio.gameObject), new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(0.5f, 0f),
-                new Vector2(0f, 6f), new Vector2(280f, 24f));
             _paperNext = MakeBtn(paper.transform, "next", "下一版 ▶", 13, P_bronze, P_btnTx);
             RectAt(Rt(_paperNext.gameObject), new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(0.5f, 0f),
-                new Vector2(160f, 8f), new Vector2(120f, 30f));
+                new Vector2(158f, 8f), new Vector2(120f, 30f));
             _paperNext.onClick.AddListener(() => PaperGo(1));
         }
 
-        static float PaperLineH(string s)
+        // ---- 报纸排版内核: 按真实栏宽折行测高(与渲染同一字体/字号/富文本) ----
+        //   关键约定: 正文里不掺 <size> 富文本(测高引擎根本不认它, 会造成"测 12、渲 8"错位);
+        //   字号一律由「整版统一字号 px」控制 —— 先设到分栏 Text 上再量, 测高与渲染逐字节一致。
+        //   注意: 带富文本(<color>/<b>)的多行整串一次 GetPreferredHeight 会把行高虚高
+        //   (9 行逐行各 19px, 整串却报 ~267px —— Unity 对硬换行 + 标签段会多算空行)。
+        //   硬换行使各行排版互不影响 → 逐行测高求和才是真实堆叠高度; 超宽行会自行折行并被逐行计入。
+        float PaperGenH(string s, int px, float w)
         {
-            int size = 12, i = s.IndexOf("<size=");
-            if (i >= 0)
-            {
-                int j = s.IndexOf('>', i);
-                int v;
-                if (j > i + 6 && int.TryParse(s.Substring(i + 6, j - i - 6), out v) && v >= 8 && v <= 60) size = v;
-            }
-            return size * 1.28f;
-        }
-        static float PaperBlockH(string block)
-        {
+            var col = (_paperCols != null && _paperCols.Length > 0) ? _paperCols[0] : null;
+            if (col == null) return 16f;                       // 兜底(栏未建, 理论不会走到)
+            col.fontSize = px;
+            var gs = col.GetGenerationSettings(new Vector2(w, 100000f));
+            var gen = new TextGenerator();
+            if (s.IndexOf('\n') < 0) return gen.GetPreferredHeight(s, gs);
             float h = 0f;
-            var lines = block.Split('\n');
-            for (int i = 0; i < lines.Length; i++)
-                h += lines[i].Length == 0 ? 4f : PaperLineH(lines[i]);
+            foreach (var ln in s.Split('\n'))
+                h += gen.GetPreferredHeight(ln, gs);
             return h;
         }
-
+        // 某页栏数对应的栏宽: 头版单栏 = 整幅宽; 多栏并排则扣去栏沟平分。
+        float ColWidthFor(int n) { return n <= 1 ? _pageW : (_pageW - PaperGap * (n - 1)) / n; }
+        // 块归类: 晨报速递/刊首提示(头版通栏) vs 城市行情块(走 4 栏, 顶满整版)。
+        //   城市块首行以粗体 ◆城名(或 ✖封锁城)开头; 速递标题是粗体 ◆ 后接"晨报速递"; 刊首提示没有粗体头标。
+        static bool LooksFront(string t)
+        {
+            int i = t.IndexOf("<b>◆", System.StringComparison.Ordinal);
+            if (i >= 0)
+            {
+                string after = t.Substring(i + 4).TrimStart();
+                return after.StartsWith("晨报速递", System.StringComparison.Ordinal);
+            }
+            return t.IndexOf("<b>✖", System.StringComparison.Ordinal) < 0;
+        }
+        // 去掉整版 <size=N></size> 富文本(老快照/旧正文都兼容), 色与粗体保留
+        static string PaperCleanSize(string s)
+        {
+            if (string.IsNullOrEmpty(s) || s.IndexOf("<size", System.StringComparison.Ordinal) < 0) return s;
+            s = System.Text.RegularExpressions.Regex.Replace(s, "<size=\\d+>", "");
+            return System.Text.RegularExpressions.Regex.Replace(s, "</size>", "");
+        }
+        // 老快照"长句规整"为当前短句(只缩短、不增字; 新刊本来就用短句 → 规则不命中 = 原样返回):
+        //   · 删掉整行的 ━━ 大陆分段头(旧版每个分区/城块首行那条大字分隔线)
+        //   · "供货 X 金 · 存量 Y 件" → "供 X · 存 Y"; "求购 X 金 · 约可收 Y 件" → "求 X · 约收 Y"
+        //   短句在 236px 窄栏一货一行不折行 → 城市块不再两倍高, 每版才能排得下 8 城(旧版就是被折行撑爆的)。
+        static string PaperSlimLegacy(string s)
+        {
+            if (string.IsNullOrEmpty(s)) return s;
+            var keep = new System.Collections.Generic.List<string>();
+            foreach (var raw in s.Split('\n'))
+            {
+                string line = raw;
+                string plain = System.Text.RegularExpressions.Regex.Replace(line, "<[^>]+>", "");
+                string tr = plain.Trim();
+                if (tr.Length >= 2 && tr[0] == '━' && tr[tr.Length - 1] == '━') continue;   // ━━ 大陆 ━━ 整行删
+                if (tr.Length == 0) continue;                                               // 规整后空行一并删
+                if (line.IndexOf("● 特产", System.StringComparison.Ordinal) >= 0 && line.IndexOf("供货 ", System.StringComparison.Ordinal) >= 0)
+                {
+                    line = line.Replace("供货 ", "供 ");
+                    line = line.Replace(" 金 · 存量 ", " · 存 ");
+                    if (line.EndsWith(" 件", System.StringComparison.Ordinal)) line = line.Substring(0, line.Length - 2);
+                }
+                else if (line.IndexOf("▲ 缺货", System.StringComparison.Ordinal) >= 0 && line.IndexOf("求购 ", System.StringComparison.Ordinal) >= 0)
+                {
+                    line = line.Replace("求购 ", "求 ");
+                    line = line.Replace(" 金 · 约可收 ", " · 约收 ");
+                    if (line.EndsWith(" 件", System.StringComparison.Ordinal)) line = line.Substring(0, line.Length - 2);
+                }
+                keep.Add(line);
+            }
+            return string.Join("\n", keep);
+        }
+        // ---- 排版(报纸版口): 头版整版字号 11, 行市版 8 城/版、字号 15→9 自动适配, 主次靠颜色/粗体 ----
+        //   第1版 = 晨报速递整版: 单栏通栏, 晨报块自上而下排满整幅宽, 放不下才再开一张头版。
+        //   第2版起 = 分港行市: 每版正好 8 个城市的供需信息(尾版剩几放几)。8 城在 4 栏里按
+        //   "当前最矮栏"平衡铺开(栏序不偏重); 8 城放不下当前字号 → 整版收字号(15→9)直到同版放稳,
+        //   上一版尾部永不因放不下而被挤去下一页; 一城一块永不拆版。
         void PaginatePaper()
         {
-            _paperPages.Clear();
-            string body = _paperSig ?? "";
-            if (body.Length == 0) { _paperPages.Add(""); return; }
+            _paperColPages.Clear(); _paperColN.Clear(); _paperFonts.Clear();
             var parts = new List<string>();
-            foreach (var b in body.Split(SeaPlay.IntelBlockSep))
+            string body = _paperSig ?? "";
+            if (body.Length > 0)
             {
-                var t = b.TrimStart('\n');
-                if (t.Length > 0) parts.Add(t);
-            }
-            if (parts.Count == 0) { _paperPages.Add(""); return; }
-            float budget = _pageH;
-            var cur = new System.Text.StringBuilder(512);
-            float curH = 0f;
-            foreach (var b in parts)
-            {
-                float bh = PaperBlockH(b);
-                if (cur.Length > 0 && curH + bh > budget)
+                foreach (var b in body.Split(SeaPlay.IntelBlockSep))
                 {
-                    _paperPages.Add(cur.ToString());
-                    cur.Length = 0; curH = 0f;
+                    var t = PaperSlimLegacy(PaperCleanSize(b)).Trim();
+                    if (t.Length > 0) parts.Add(t);
                 }
-                cur.Append(b).Append('\n');
-                curH += bh;
             }
-            if (cur.Length > 0) _paperPages.Add(cur.ToString());
-            if (_paperPages.Count == 0) _paperPages.Add("");
+            // 分群: 晨报速递/刊首(头版通栏) vs 城市行情块(4 栏)
+            var front = new List<string>();
+            var cities = new List<string>();
+            foreach (var t in parts)
+                (LooksFront(t) ? front : cities).Add(t);
+            if (front.Count == 0 && cities.Count == 0)
+                front.Add(string.IsNullOrEmpty(_paperIssue)
+                    ? "今日报纸还没送到案头。"
+                    : "本刊正文尚缺 —— 回大厅买今日《" + SeaPlay.IntelPaperName + "》。");
+
+            float cap = _pageH;
+            const int Pf = 11;                     // 头版(晨报速递)整版字号; 行市版按 8 城一版另行定字号
+            const int CityPerPage = 8;             // 行市版版口: 第 2 版起每版正好 8 个城市的供需信息
+            const int CityFontMax = 15, CityFontMin = 9;   // 行市版字号可调域(第2版起放大: 8 城放得下尽量放大到 15, 挤不下才收到 9)
+
+            // 行距是"测高即渲染"的一环: 头版量/渲用 PaperHeadLead, 行市版量/渲用 PaperMarketLead。
+            if (_paperCols != null)
+            {
+                for (int c = 0; c < _paperCols.Length; c++)
+                    if (_paperCols[c] != null) _paperCols[c].lineSpacing = PaperMarketLead;
+            }
+
+            void AddPage(string[] cols, int colN) { AddPageF(cols, colN, Pf); }
+            void AddPageF(string[] cols, int colN, int px)
+            {
+                _paperColPages.Add(cols);
+                _paperColN.Add(colN);
+                _paperFonts.Add(px);
+            }
+            // 块间必以硬换行相接(块尾无 \n 则补一个), 使块各行独立、测高可按块累加
+            string JoinB(string cur, string add)
+            {
+                if (cur == null || cur.Length == 0) return add;
+                return cur.EndsWith("\n", System.StringComparison.Ordinal) ? cur + add : cur + "\n" + add;
+            }
+            // 把 [s0, s0+take) 的城块在 4 栏里"当前最矮栏"平衡铺开(栏序不偏重一侧);
+            //   4 栏每栏都 ≤ 版高才算放得稳 → 返回栏文本; 否则返回 null(由调用方收字号重排)。
+            string[] PackColumns(List<string> all, int s0, int take, int px, float w)
+            {
+                var txt = new string[PaperCols];
+                var used = new float[PaperCols];
+                for (int i = 0; i < take; i++)
+                {
+                    string blk = all[s0 + i];
+                    float h = PaperGenH(blk, px, w);
+                    int best = 0;
+                    for (int c = 1; c < PaperCols; c++)
+                        if (used[c] < used[best]) best = c;
+                    txt[best] = JoinB(txt[best], blk);
+                    used[best] += h;
+                }
+                for (int c = 0; c < PaperCols; c++)
+                    if (used[c] > cap + 0.01f) return null;
+                return txt;
+            }
+
+            // —— 头版: 晨报速递 · 单栏通栏(整幅宽) ——
+            if (_paperCols != null && _paperCols[0] != null) _paperCols[0].lineSpacing = PaperHeadLead;
+            string tcur = ""; float tu = 0f;
+            for (int k = 0; k < front.Count; k++)
+            {
+                float h = PaperGenH(front[k], Pf, _pageW);
+                if (tcur.Length > 0 && tu + h > cap)
+                {
+                    var cols = new string[PaperCols];
+                    cols[0] = tcur;
+                    AddPage(cols, 1);
+                    tcur = ""; tu = 0f;
+                }
+                tcur = JoinB(tcur, front[k]);
+                tu += h;
+            }
+            if (tcur.Length > 0)
+            {
+                var cols = new string[PaperCols];
+                cols[0] = tcur;
+                AddPage(cols, 1);
+            }
+
+            // —— 分港行市版: 每版 8 城(第 2 版即 8 城满版) ——
+            //   尾版不做"剩几放几"(52 城 → 前 6 版各 8 + 尾版孤零零 4 城会显得空):
+            //   把城市按整版数尽量均摊 —— 52 城 ÷ 7 版 = 每版 7~8 城(前几版 8、后几版 7), 尾版同样够满。
+            //   每批在 4 栏里按"当前最矮栏"平衡铺开; 整批放不下当前字号 → 整版收字号(15→9)重排,
+            //   直到同版放稳 —— 保证一城不拆版、上一版尾部不会被挤去下一页。
+            float gw = ColWidthFor(PaperCols);
+            // 测高复用 col0, 此刻切回行市版行距(头版测高刚把它设成 PaperHeadLead)
+            if (_paperCols != null && _paperCols[0] != null) _paperCols[0].lineSpacing = PaperMarketLead;
+            int nPages = (cities.Count + CityPerPage - 1) / CityPerPage;   // ≥1(cities 非空时)
+            int lo = cities.Count / nPages;          // 每版起码 lo 城(向下取整)
+            int hi = lo + 1;
+            int nBig = cities.Count - lo * nPages;   // 前 nBig 版排 hi 城(≈8), 其后版排 lo 城(≈8 略少 1)
+            for (int pi = 0, start = 0; pi < nPages && start < cities.Count; pi++)
+            {
+                int take = pi < nBig ? hi : lo;
+                string[] cols = null;
+                int px = Pf;
+                for (int f = CityFontMax; f >= CityFontMin; f--)     // 从大到小试字号, 第一个放稳整版城市数的定稿
+                {
+                    cols = PackColumns(cities, start, take, f, gw);
+                    if (cols != null) { px = f; break; }
+                }
+                if (cols != null)
+                {
+                    AddPageF(cols, PaperCols, px);
+                    start += take;
+                    continue;
+                }
+                // 极端兜底: 整批城市连 9 号(最小字号)都挤不进一版(几乎不可能) → 退回按栏高自然贪心翻页, 不裁字不丢城
+                var txt = new string[PaperCols];
+                var used = new float[PaperCols];
+                int cc = 0, placed = 0;
+                for (int k = start; k < cities.Count; k++)
+                {
+                    float h = PaperGenH(cities[k], CityFontMin, gw);
+                    while (true)
+                    {
+                        if (used[cc] + h <= cap)
+                        {
+                            txt[cc] = JoinB(txt[cc], cities[k]);
+                            used[cc] += h; placed++;
+                            break;
+                        }
+                        if (placed > 0)
+                        {
+                            if (cc < PaperCols - 1) { cc++; continue; }
+                            AddPageF(txt, PaperCols, CityFontMin);
+                            txt = new string[PaperCols]; used = new float[PaperCols];
+                            cc = 0; placed = 0;
+                            continue;
+                        }
+                        txt[cc] = JoinB(txt[cc], cities[k]);
+                        used[cc] += h; placed++;
+                        break;
+                    }
+                }
+                if (placed > 0) AddPageF(txt, PaperCols, CityFontMin);
+                break;
+            }
+            if (_paperColPages.Count == 0) AddPage(new string[PaperCols], 1);
         }
 
         void PaperGo(int d)
         {
-            if (_paperPages.Count == 0) PaginatePaper();
-            int n = _paperPages.Count;
+            int n = _paperColPages.Count;
+            if (n == 0) { PaginatePaper(); n = _paperColPages.Count; }
             _paperIdx = Mathf.Clamp(_paperIdx + d, 0, n - 1);
-            if (_paperBody != null) _paperBody.text = n > 0 ? _paperPages[_paperIdx] : "";
-            if (_paperFolio != null) _paperFolio.text = n > 0 ? "—— 第 " + (_paperIdx + 1) + " / " + n + " 版 ——" : "";
+            var page = _paperColPages[Mathf.Min(_paperIdx, n - 1)];
+            // 每版翻到时按该版实际栏数重排几何 + 切整版统一字号(排版时测高用的就是它)
+            int colN = (_paperColN != null && _paperIdx < _paperColN.Count) ? _paperColN[_paperIdx] : PaperCols;
+            float cw = ColWidthFor(colN);
+            int f = (_paperFonts != null && _paperIdx < _paperFonts.Count) ? _paperFonts[_paperIdx] : 11;
+            for (int c = 0; c < PaperCols; c++)
+            {
+                if (_paperCols == null || c >= _paperCols.Length || _paperCols[c] == null) continue;
+                var col = _paperCols[c];
+                if (c < colN)
+                {
+                    col.gameObject.SetActive(true);
+                    col.fontSize = f;
+                    // 行距与排版测高对齐: 头版(单栏通栏)用 PaperHeadLead, 行市版(多栏)用 PaperMarketLead
+                    col.lineSpacing = colN > 1 ? PaperMarketLead : PaperHeadLead;
+                    RectAt(Rt(col.gameObject), new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(0f, 1f),
+                        new Vector2(6f + c * (cw + PaperGap), 0f), new Vector2(cw, _pageH));
+                    col.text = page != null && c < page.Length ? (page[c] ?? "") : "";
+                }
+                else
+                {
+                    col.text = "";
+                    col.gameObject.SetActive(false);
+                }
+            }
+            string issue = _paperIssue.Length > 0 ? " · " + _paperIssue : "";
+            if (_paperFolio != null)
+                _paperFolio.text = "《 贸 易 日 报 》" + issue + "    第 " + (_paperIdx + 1) + " / " + n + " 版";
             if (_paperPrev != null) _paperPrev.interactable = _paperIdx > 0;
-            if (_paperNext != null) _paperNext.interactable = n > 0 && _paperIdx < n - 1;
+            if (_paperNext != null) _paperNext.interactable = _paperIdx < n - 1;
         }
 
         void ShowNewsPaper(SeaIntelSave e)
@@ -2264,16 +2524,15 @@ namespace Sea
             if (e == null) e = play.IntelPaperTodayIssue();
             _openPaper = e;
             _newsPage = "paper";
-            _paperMast.text = "《 贸 易 日 报 》";
             if (e != null)
             {
                 _paperSig = e.body;
-                _paperSub.text = e.title + " · " + e.sub;
+                _paperIssue = (e.title ?? "") + (string.IsNullOrEmpty(e.sub) ? "" : " · " + e.sub);
             }
             else
             {
                 _paperSig = "";
-                _paperSub.text = "本期还没买到 —— 回大厅买一份今日《" + SeaPlay.IntelPaperName + "》。";
+                _paperIssue = "";
             }
             PaginatePaper();
             _paperIdx = 0;

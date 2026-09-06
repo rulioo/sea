@@ -7,7 +7,7 @@ using UnityEngine.UI;
 namespace Sea
 {
     // =============================================================
-    // SEA · 启动首页(纯代码 uGUI, Canvas sortingOrder 40 = 最高层)
+    // SEA · 启动首页(纯代码 uGUI, Canvas sortingOrder 40; 设置弹层已提到 60 = 全局最高)
     //   打开游戏先盖一整屏黑色:
     //     - 中央黑色大框内放大 logo(Resources/logo/logo.png)
     //     - 四个按钮: 新开航程 ▶ / 继续辉煌 📂 / 设置 ⚙ / 退出 🚪
@@ -26,6 +26,7 @@ namespace Sea
 
         Text _bgmVal, _sfxVal, _muteLbl;
         Button _muteBtn;
+        Text _winLbl;   // 窗口模式复选框文字(☐ 全屏 / ☑ 窗口化), 与游戏内 ⚙设置 共用同一开关/存档键
 
         static Sprite s_white;
         static Font s_font;
@@ -195,11 +196,11 @@ namespace Sea
                 new Vector2(0, 0), new Vector2(640, 470));
             _audioCard.SetActive(false);
 
-            var t = AddText(_audioCard.transform, "设  置 · 音乐与音效", 22, ColGold, TextAnchor.MiddleCenter);
+            var t = AddText(_audioCard.transform, "设  置", 22, ColGold, TextAnchor.MiddleCenter);
             RectAt(Rt(t.gameObject), new Vector2(0, 1), new Vector2(1, 1), new Vector2(0.5f, 1),
                 new Vector2(0, -6), new Vector2(0, 38));
 
-            var note = AddText(_audioCard.transform, "(主页正放「片头 · 港口」; 音量即时生效, 进游戏后可用 ⚙设置 换 BGM 曲目)",
+            var note = AddText(_audioCard.transform, "(音量即时生效; 显示模式与游戏内 ⚙设置 共用)",
                 13, ColDim, TextAnchor.MiddleCenter);
             RectAt(Rt(note.gameObject), new Vector2(0.5f, 1), new Vector2(0.5f, 1), new Vector2(0.5f, 1),
                 new Vector2(0, -50), new Vector2(600, 22));
@@ -215,6 +216,13 @@ namespace Sea
                 new Vector2(0, -226), new Vector2(320, 50));
             _muteBtn.onClick.AddListener(() => { if (_audio != null) _audio.ToggleMute(); });
             _muteLbl = _muteBtn.GetComponentInChildren<Text>();
+
+            // 显示: 窗口模式复选框(☐ 全屏启动默认 / ☑ 窗口化 → 顶部出现系统标题栏)
+            var win = MakeBtn(_audioCard.transform, "win", "", 15, ColBtn, Color.white);
+            RectAt(Rt(win.gameObject), new Vector2(0.5f, 1), new Vector2(0.5f, 1), new Vector2(0.5f, 1),
+                new Vector2(0, -300), new Vector2(520, 52));
+            _winLbl = win.GetComponentInChildren<Text>();
+            win.onClick.AddListener(ToggleWindowed);
 
             var back = MakeBtn(_audioCard.transform, "back", "← 返回", 17, ColBtn, Color.white);
             RectAt(Rt(back.gameObject), new Vector2(0.5f, 1), new Vector2(0.5f, 1), new Vector2(0.5f, 1),
@@ -267,6 +275,22 @@ namespace Sea
             if (_muteLbl != null) _muteLbl.text = "全部静音: " + (_audio.Muted ? "开(静音中)" : "关");
             if (_muteBtn != null)
                 _muteBtn.GetComponent<Image>().color = _audio.Muted ? ColGoldBtn : ColBtn;
+            RefreshWindowLabel();
+        }
+
+        // 窗口模式开关: 在 全屏 / 窗口化(带系统标题栏) 间切换并落盘(与游戏内 ⚙设置 共用 SeaSettings 静态开关)
+        void ToggleWindowed()
+        {
+            if (SeaAudio.Instance != null) SeaAudio.Instance.SfxClick();
+            SeaSettings.SetDisplayWindowed(!SeaSettings.DisplayWindowed);
+            RefreshWindowLabel();
+        }
+        void RefreshWindowLabel()
+        {
+            if (_winLbl == null) return;
+            bool win = SeaSettings.DisplayWindowed;
+            _winLbl.text = (win ? "☑" : "☐") + "  窗口模式: "
+                + (win ? "窗口化运行(顶部出现标题栏)" : "全屏运行(启动默认)");
         }
 
         void LateUpdate()

@@ -484,10 +484,11 @@ namespace Sea
         public const float FoodCrewLossPerDay = 0.20f; // 断粮次日起每日减员上限 20%
 
         // 硬续航(全口径, 天): min over 三类 floor(库存份 / (总水手×每水手日耗))
+        //   水手 = 0 → 没有消耗者也谈不上续航: 返回 0 而非天文数字(不可出航, 不给 21 亿日误导)。
         public static int EnduranceDays(ProvisionStock prov, int totalCrew,
             float foodRate, float waterRate, float teaRate)
         {
-            if (totalCrew <= 0) return int.MaxValue;
+            if (totalCrew <= 0) return 0;
             int dF = FloorDiv(prov.Food, totalCrew * foodRate);
             int dW = FloorDiv(prov.Water, totalCrew * waterRate);
             int dT = FloorDiv(prov.Tea, totalCrew * teaRate);

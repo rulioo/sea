@@ -10,7 +10,8 @@ namespace Sea
     // SEA · 设置菜单(齿轮 → 设置)
     //   主菜单: 保存进度 / 载入进度 / 音乐音效 / 退出游戏
     //   音乐音效: 选 BGM 曲、音乐与音效两个音量滑杆、全部静音
-    //   SeaPlay.Start 会把它 AddComponent 到同一物体上(再盖一块 30 层 Canvas)。
+    //   显示: 默认全屏; 勾选「窗口模式」→ 窗口化(顶部出现系统标题栏), 随 PlayerPrefs 存。
+    //   SeaPlay 会把它 AddComponent 到同一物体上(再盖一块 60 层 Canvas = 全局最高)。
     // =============================================================
     [DefaultExecutionOrder(-40)]
     public sealed class SeaSettings : MonoBehaviour
@@ -22,6 +23,10 @@ namespace Sea
         GameObject _overlay, _mainCard, _audioCard;
         Text _hint;
         Text _flagLbl;   // 地图旗标开关按钮上的文字(设置主卡)
+        Text _winLbl;    // 窗口模式开关按钮上的文字(设置主卡)
+
+        // 设置弹层此刻是否开着(HUD AnyTopOpen 并入 → 开着时吞掉地图输入并藏掉地名)
+        public bool OpenNow => _open;
 
         // 音乐音效页引用
         readonly List<Button> _tracks = new List<Button>();
@@ -39,6 +44,39 @@ namespace Sea
         static readonly Color ColTxt = new Color(0.93f, 0.95f, 0.98f);
         static readonly Color ColDim = new Color(0.62f, 0.70f, 0.78f);
         static readonly Color ColFill = new Color(0.95f, 0.78f, 0.30f, 1f);
+
+        // ---- 全屏 / 窗口模式: 启动默认全屏; 勾选「窗口模式」→ 桌面窗口(顶部出现系统标题栏)。
+        //      开关随 PlayerPrefs 存, 下次启动自动恢复(没存过 = 全屏)。 ----
+        const string PrefWin = "SEA_windowed";
+        public static bool DisplayWindowed => PlayerPrefs.GetInt(PrefWin, 0) != 0;   // 缺省 0 → 全屏(首页设置卡也读它)
+        public static void SetDisplayWindowed(bool win)
+        {
+            PlayerPrefs.SetInt(PrefWin, win ? 1 : 0);
+            PlayerPrefs.Save();
+            ApplyWindowed(win);
+        }
+        // 启动调用: 应用存档的显示模式; 没存过 → 默认全屏
+        public static void ApplyStartupDisplay() => ApplyWindowed(DisplayWindowed);
+        public static void ApplyWindowed(bool win)
+        {
+            if (Application.isEditor) return;   // 编辑器里不折腾全屏/分辨率
+            if (!win)
+            {
+                // 全屏: 必须以显示器原生分辨率打开。只设 Screen.fullScreen=true 会沿用
+                // 上一步的窗口分辨率(如 1600×900), 由显卡拉伸撑满全屏 → 文字发虚。
+                // 边框无窗 FullScreenWindow 逐点对桌面像素渲染, 最清晰且切换不黑屏。
+                int dw = Screen.currentResolution.width, dh = Screen.currentResolution.height;
+                if (dw > 0 && dh > 0) Screen.SetResolution(dw, dh, FullScreenMode.FullScreenWindow);
+                else Screen.fullScreen = true;   // 兜底(理论走不到)
+                return;
+            }
+            int cw = Screen.currentResolution.width, ch = Screen.currentResolution.height;
+            int w = Mathf.Min(1600, cw);                 // 窗口上限 1600 宽, 桌面不够就随桌面
+            int h = Mathf.RoundToInt(w * (9f / 16f));
+            if (w >= cw || h >= ch) { w = cw; h = ch; }  // 桌面偏小 → 直接整桌面窗口
+            Screen.fullScreen = false;                   // 窗口化 → 顶部出现系统标题栏
+            Screen.SetResolution(w, h, false);
+        }
 
         void Awake() { play = GetComponent<SeaPlay>(); }
 
@@ -62,7 +100,7 @@ namespace Sea
             cvGo.transform.SetParent(transform, false);
             var cv = cvGo.GetComponent<Canvas>();
             cv.renderMode = RenderMode.ScreenSpaceOverlay;
-            cv.sortingOrder = 30;
+            cv.sortingOrder = 60;   // 全局最高层(高于 HUD 20 / 首页 40): 地图地名不可能再盖住设置弹层
             var sc = cvGo.GetComponent<CanvasScaler>();
             sc.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
             sc.referenceResolution = new Vector2(1280, 720);
@@ -97,6 +135,7 @@ namespace Sea
             _audioCard.SetActive(false);
             _hint.text = "";
             RefreshFlagLabel();
+            RefreshWindowLabel();
         }
         void Close() { _open = false; _audioOpen = false; _overlay.SetActive(false); }
 
@@ -163,16 +202,38 @@ namespace Sea
                 .onClick.AddListener(OnExit);
 
             // 地图旗标开关: 大本营(黄, 稍大) + 每新到城市插小红旗
-            var flag = MakeBtn(_mainCard.transform, "flag", "", 17, ColBtn, Color.white);
+            var flag = MakeBtn(_mainCard.transform, "flag", "", 16, ColBtn, Color.white);
             RectAt(Rt(flag.gameObject), new Vector2(0.5f, 1), new Vector2(0.5f, 1), new Vector2(0.5f, 1),
-                new Vector2(0, -348), new Vector2(520, 56));
+                new Vector2(0, -348), new Vector2(520, 52));
             _flagLbl = flag.GetComponentInChildren<Text>();
             flag.onClick.AddListener(ToggleMapFlags);
 
+            // 窗口模式复选框: ☐ 全屏(启动默认) / ☑ 窗口化运行 → 顶部出现系统标题栏
+            var win = MakeBtn(_mainCard.transform, "win", "", 16, ColBtn, Color.white);
+            RectAt(Rt(win.gameObject), new Vector2(0.5f, 1), new Vector2(0.5f, 1), new Vector2(0.5f, 1),
+                new Vector2(0, -406), new Vector2(520, 52));
+            _winLbl = win.GetComponentInChildren<Text>();
+            win.onClick.AddListener(ToggleWindowed);
+
             _hint = AddText(_mainCard.transform, "", 15, new Color(1f, 0.62f, 0.55f), TextAnchor.MiddleCenter);
             RectAt(Rt(_hint.gameObject), new Vector2(0.5f, 1), new Vector2(0.5f, 1), new Vector2(0.5f, 1),
-                new Vector2(0, -430), new Vector2(560, 60));
+                new Vector2(0, -470), new Vector2(560, 58));
             _hint.horizontalOverflow = HorizontalWrapMode.Wrap;
+        }
+
+        // 窗口模式开关: 在 全屏 / 窗口化(带标题栏) 间切换并落盘
+        void ToggleWindowed()
+        {
+            if (SeaAudio.Instance != null) SeaAudio.Instance.SfxClick();
+            SetDisplayWindowed(!DisplayWindowed);
+            RefreshWindowLabel();
+        }
+        void RefreshWindowLabel()
+        {
+            if (_winLbl == null) return;
+            bool win = DisplayWindowed;
+            _winLbl.text = (win ? "☑" : "☐") + "  窗口模式: "
+                + (win ? "窗口化运行(顶部出现标题栏)" : "全屏运行(默认)");
         }
 
         void OnSave()

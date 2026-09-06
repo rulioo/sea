@@ -17,7 +17,8 @@ namespace Sea
     [DefaultExecutionOrder(-90)]
     public sealed class SeaPlay : MonoBehaviour
     {
-        public enum Mode { Docked, Sailing }
+        // 泊港(在城里) ⇄ 海上(驶往某城或某海图点) ⇄ 抛锚(到海图点停船, 不靠港)
+        public enum Mode { Docked, Sailing, Anchored }
 
         // ---------------- 开局 ----------------
         public int seed = 15500712;
@@ -36,6 +37,10 @@ namespace Sea
 
         public Port Current { get; private set; }
         public Port Dest { get; private set; }
+        // ---- 探索模式: 目标不是某座确定城, 而是海图上任意一点 —— 点海面插红旗, 船驶到那儿抛锚 ----
+        public bool ExploreSet { get; private set; }        // 当前目标是海图上插旗处(非港口)
+        public Vector3 ExploreWorld { get; private set; }   // 插旗/锚地世界坐标
+        public bool HasSailTarget => Dest != null || ExploreSet;   // 有没有可出航的目标(城或旗点)
         public Mode State { get; private set; } = Mode.Docked;
 
         // 航行进度(供 UI 与相机)
@@ -62,7 +67,16 @@ namespace Sea
         public bool FlagsOn = true;                              // 设置里的开关, 随存读档
         readonly HashSet<string> _cityFlags = new HashSet<string>();   // 已抵达过的城市 id(红旗; 大本营不算)
         readonly Dictionary<string, Transform> _flagRoots = new Dictionary<string, Transform>();   // 港 id → 旗标根
+        readonly Dictionary<string, Transform> _flagCloth = new Dictionary<string, Transform>();  // 港 id → 旗布(逐帧轻摆)
+        readonly Dictionary<string, float> _flagPhase = new Dictionary<string, float>();          // 港 id → 摆动相位(错开, 别齐刷刷)
         readonly List<string> _areaOrder = new List<string>();
+        SeaFog _fog;                                 // 黑雾遮罩(探索迷雾): 见 SeaFog.cs, 随存读档
+        const float FogSailR = 16f;   // 航行时以船位为心揭开"航道条带"半径(两侧探明 ~16°) —— 海图逐程被自己走开
+        const float FogDockR = 40f;   // 靠港/开局以港为心再亮一大圈(40°), 便于看图定下一程
+        const float FogAnchorR = 24f; // 抛锚停船: 在船位再亮一小圈, 够看清下一点(不必像进港那样一大片)
+
+        Transform _exploreFlag;        // 🚩 探索红旗: 选中的海图点 / 抛锚地标(杆+正红燕尾旗+水面红光环)
+        Vector3 _anchor;               // 抛锚地: 到海图点停船后船所在(随波轻晃的中心), 下次续航从这儿出发
         Transform _ship;
         readonly List<Transform> _shipSails = new List<Transform>();
         Camera _cam;
@@ -77,6 +91,7 @@ namespace Sea
         const float BallFloatY = 1.2f;    // 港口光球的"球底"世界高度: 一定高于平陆与浪脊, 永不被大陆遮挡
         const float ShipVisualScale = 0.6f;   // 船模整体缩小(相对海图/港口球的比例更真实, 不显"巨舰")
         const float ShipTurnRate = 70f;       // 海上转向限速(°/秒): 转弯是渐转, 不再每帧甩头/来回摆
+        const float FlagTilt = -28f;          // 旗面扬起角(外端略上扬, 高空俯视也像一面小旗而非地贴)
 
         // 航行计时
         float _voyageT;
@@ -94,6 +109,8 @@ namespace Sea
         Vector2 _panPrev;         // 上一帧光标位置 → 增量平移用(每帧只加"上一光标→本光标"这段地面位移, 避免旧锚反馈振荡=抖)
         SeaHud _hud;              // 顶层层闸: 浮层开着时, 底下地图输入(缩放/拖移/点选)全停
         SeaHome _home;            // 启动首页(黑底 logo + 新开航程/继续辉煌/设置/退出)
+        SeaSettings _settings;    // 设置弹层(置顶 + 窗口模式; AnyTopOpen 用它闸地图输入/藏地名)
+        public bool SettingsOpen => _settings != null && _settings.OpenNow;
 
         // 持仓成本账本(行情表"成本"列 = 件均买入成本): 买多少件累计花了多少钱
         readonly Dictionary<string, long> _basisQty = new Dictionary<string, long>();
@@ -114,6 +131,8 @@ namespace Sea
         {
             // 旧版 SeaGame 调试面板自动创建于场景时移除, 避免双地图双 UI
             foreach (var g in FindObjectsByType<SeaGame>(FindObjectsSortMode.None)) Destroy(g.gameObject);
+            // 显示模式: 启动默认全屏(玩家存过「窗口模式」才窗口化 → 顶部出现标题栏)
+            SeaSettings.ApplyStartupDisplay();
         }
 
         void Start()
@@ -136,7 +155,7 @@ namespace Sea
             _cam.fieldOfView = 60f;
 
             audio = SeaAudio.Ensure(this);
-            if (GetComponent<SeaSettings>() == null) gameObject.AddComponent<SeaSettings>();
+            _settings = GetComponent<SeaSettings>() ?? gameObject.AddComponent<SeaSettings>();
 
             if (!BootData())
             {
@@ -146,6 +165,7 @@ namespace Sea
             }
             BuildWorldVisual();
             BuildFleetVisual();
+            BuildFogVisual();   // 海图盖一层黑雾(初始全黑; 开局在自家港自动现形一圈, 见 Update)
             FrameHome();
             ApplyCamera(_target);   // 首帧: 就近看船和港口, 不等 Update 才摆
             StartWorth = NetWorth();
@@ -172,6 +192,7 @@ namespace Sea
         public void StartNewVoyage()
         {
             if (world == null || fleet == null) { HomeHint("开局失败: " + (LoadError ?? "世界未就绪")); return; }
+            StartFlagsOn();                            // 启动默认点亮地图旗标(大本营黄旗/到过红旗)
             if (audio != null) audio.PlayBgmDefault();   // 离开主页 → 主题曲(玩家在设置里选过则用所选)
             _home?.Hide();
         }
@@ -181,10 +202,21 @@ namespace Sea
         {
             if (LoadGame())
             {
+                StartFlagsOn();                        // 读档起步同样默认点亮旗标
                 if (audio != null) audio.PlayBgmDefault();
                 _home?.Hide();
             }
             else HomeHint(Banner);
+        }
+
+        // 开局/读档起步: 一律把地图旗标拨回"开"并立即应用(随后的存档也会把这状态记下)
+        void StartFlagsOn()
+        {
+            if (!FlagsOn)
+            {
+                FlagsOn = true;
+                ApplyCityFlags();
+            }
         }
 
         // 开局那两句日志(与可能的"重开"共用同一份话术)
@@ -226,14 +258,38 @@ namespace Sea
         {
             if (world == null || fleet == null) return;
             HandleCamAndPick();
+            TickFlagWaver();
             if (State == Mode.Sailing) TickSailing();
-            else PlaceShipAt(Current, Time.time);
+            else if (State == Mode.Docked) PlaceShipAt(Current, Time.time);
+            else AnchorBob(Time.time);   // Anchored: 船在海图点下抛锚, 随波轻晃不挪位
+            if (_fog != null && _ship != null)   // 迷雾逐帧以船位为中心揭圈(航行=航道条带; 泊港=视野大圈; 抛锚=中等圈)
+            {
+                float rr = State == Mode.Sailing ? FogSailR : State == Mode.Docked ? FogDockR : FogAnchorR;
+                _fog.RevealAt(_ship.position.x, _ship.position.z, rr);
+                _fog.Tick(Time.deltaTime);
+            }
         }
 
         // =============================================================
         // 港口标记 / 世界视觉
         // =============================================================
         public static Vector3 LonLatToWorld(Port p) => new Vector3(p.Lon, 0f, -p.Lat);
+
+        // 黑雾遮罩就位(与海面同界的一大块; 初始全黑, 见 SeaFog.cs)
+        void BuildFogVisual()
+        {
+            if (_fog != null) return;
+            _fog = new SeaFog();
+            _fog.Build(_root);
+        }
+
+        // 该港头顶是否已探明(黑雾已掀开、能看见它)? 没建雾(理论不会)一律视为可见。
+        public bool CityRevealed(Port p)
+        {
+            if (p == null) return false;
+            if (_fog == null) return true;
+            return _fog.RevealedXZ(p.Lon, -p.Lat);
+        }
 
         void BuildWorldVisual()
         {
@@ -478,17 +534,21 @@ namespace Sea
         }
 
         // =============================================================
-        // 城市旗标: 大本营(homePortId)一面稍大黄色旗; 每个到过的城市一面小红旗。
-        //   每港 = 一根细旗杆 + 旗杆顶一面平铺的三角小旗(略上扬, 高空海图也看得清色块)。
+        // 城市旗标: 大本营(homePortId)一面稍大金黄旗; 每个到过的城市一面正红小旗。
+        //   每港 = 一根细旗杆 + 旗杆顶一面"燕尾帆船旗"(外端开叉, 底下垫一片略大的深色同形 = 勾边,
+        //   底色正红/金黄在图上边界清晰), 旗布平时略上扬、逐帧随风轻摆。
         //   亮不亮由设置开关 FlagsOn + 港状态决定, 进港 / 读档 / 切开关后 ApplyCityFlags 刷新。
         // =============================================================
         static readonly Color ColWoodFlag = new Color(0.42f, 0.29f, 0.17f);
-        static readonly Color ColRedFlag = new Color(0.93f, 0.26f, 0.20f);
-        static readonly Color ColHomeFlag = new Color(1f, 0.84f, 0.22f);
+        static readonly Color ColRedFlag = new Color(0.86f, 0.08f, 0.06f);      // 正红(纯红系, 不再偏橙)
+        static readonly Color ColHomeFlag = new Color(1f, 0.80f, 0.14f);        // 金黄(大本营)
+        static readonly Color ColEdgeFlag = new Color(0.09f, 0.07f, 0.05f);     // 勾边: 深暖褐近黑, 垫在旗布下方一圈
 
         void BuildCityFlags()
         {
             _flagRoots.Clear();
+            _flagCloth.Clear();
+            _flagPhase.Clear();
             if (world == null) return;
             foreach (var p in world.Ports)
             {
@@ -506,8 +566,8 @@ namespace Sea
 
             float s = home ? 1.5f : 0.85f;       // 大本营旗稍大, 普通到过旗小
             float H = (home ? 2.6f : 1.7f) * s;   // 旗杆高
-            float L = (home ? 2.0f : 1.35f) * s;  // 小旗伸出长
-            float W = (home ? 1.15f : 0.8f) * s;  // 小旗杆端宽
+            float L = (home ? 2.0f : 1.35f) * s;  // 燕尾旗伸出长(沿 +Z)
+            float W = (home ? 1.15f : 0.8f) * s;  // 旗杆端高度(hoist)
             const float baseY = 0.35f;            // 旗杆扎根于水面之上(浪高≈0.03, 淹不到)
 
             // 旗杆立在港球一侧(向 +X 东侧移开), 不与球顶的港名标签抢正上方位置
@@ -521,25 +581,50 @@ namespace Sea
             var cloth = PennantMesh(home ? ColHomeFlag : ColRedFlag, L, W * 0.5f);
             cloth.SetParent(root, false);
             cloth.localPosition = new Vector3(0f, baseY + H, 0f);
-            cloth.localRotation = Quaternion.Euler(-28f, 0f, 0f);   // 外端(朝 +Z 南侧)略上扬: 俯视仍是一面小三角旗
+            cloth.localRotation = Quaternion.Euler(FlagTilt, 0f, 0f);   // 旗面略上扬: 高空俯视像一面小旗
 
+            // 记下布面 → 逐帧轻摆; 相位按港 id 打散, 别整片齐刷刷
+            _flagCloth[p.Id] = cloth;
+            float ph = 0f;
+            for (int k = 0; k < p.Id.Length; k++) ph += (p.Id[k] - 'a') * (k + 1);
+            _flagPhase[p.Id] = Mathf.Repeat(ph * 0.13f, Mathf.PI * 2f);
             return root;
         }
 
-        // 一面平铺的三角小旗(等腰: 底贴旗杆、尖朝 +Z 外伸); 上扬角由父级 rotation 调
+        // 一面扬起的"燕尾帆船旗"(像帆船尾挂的小旗: 杆端满高, 外端开成两角):
+        //   主色(正红 / 金黄)下方先垫一片略大的同形深色 = 勾边, 色块在图上边界利落。
+        //   上扬角与轻摆由父级 cloth 的 rotation 逐帧调(见 TickFlagWaver)。
         Transform PennantMesh(Color c, float len, float halfW)
         {
             var go = new GameObject("cloth");
+            float notch = Mathf.Min(len * 0.5f, halfW * 1.7f);   // 燕尾开叉深度(沿旗长向内切)
+            const float edgeK = 1.15f;                            // 勾边同形放大系数
+            AddClothPly(go, ColEdgeFlag, new Vector3(0f, -0.02f, 0f),
+                len * edgeK, halfW * edgeK, notch * edgeK);
+            AddClothPly(go, c, Vector3.zero, len, halfW, notch);
+            return go.transform;
+        }
+
+        // 一片燕尾布面(平面 XZ, +y 法线朝上): 布面不会只有一块三角, 外端开叉 → 更像船旗
+        void AddClothPly(GameObject parent, Color c, Vector3 localPos, float len, float halfW, float notch)
+        {
+            var go = new GameObject("ply");
+            go.transform.SetParent(parent.transform, false);
+            go.transform.localPosition = localPos;
             var mf = go.AddComponent<MeshFilter>();
+            float apex = len - notch;   // 叉内凹点到杆端的距离
+            // 轮廓: 杆端上下角 → 外端上下两尾尖, 中间内凹到叉根: 一块矩形切掉中央三角
             var mesh = new Mesh
             {
                 vertices = new[]
                 {
-                    new Vector3(-halfW, 0f, 0f),   // 0 杆端左
-                    new Vector3(halfW, 0f, 0f),    // 1 杆端右
-                    new Vector3(0f, 0f, len)       // 2 外端尖
+                    new Vector3(halfW, 0f, 0f),     // 0 杆端上角
+                    new Vector3(-halfW, 0f, 0f),    // 1 杆端下角
+                    new Vector3(halfW, 0f, len),    // 2 外端上尾尖
+                    new Vector3(0f, 0f, apex),      // 3 叉内凹点(开叉根部)
+                    new Vector3(-halfW, 0f, len)    // 4 外端下尾尖
                 },
-                triangles = new[] { 0, 2, 1 }
+                triangles = new[] { 0, 1, 2, 1, 4, 2, 2, 4, 3 }
             };
             mesh.RecalculateNormals();
             mesh.RecalculateBounds();
@@ -549,10 +634,25 @@ namespace Sea
             mr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
             mr.receiveShadows = false;
             var mat = StdMat(c);
-            mat.SetColor("_EmissionColor", c * 0.5f);
+            mat.SetColor("_EmissionColor", c * 0.45f);
             mat.EnableKeyword("_EMISSION");
             mr.material = mat;
-            return go.transform;
+        }
+
+        // 逐帧让各旗布轻摆(极廉价, 只在有旗亮时算): 一低一高两条 sin 叠加 → 上下起伏 + 左右轻晃, 像随海风自然飘动
+        void TickFlagWaver()
+        {
+            if (_flagCloth.Count == 0) return;
+            float t = Time.time;
+            foreach (var kv in _flagCloth)
+            {
+                var cloth = kv.Value;
+                if (cloth == null || !cloth.gameObject.activeSelf) continue;
+                float ph = _flagPhase.TryGetValue(kv.Key, out var p) ? p : 0f;
+                float up = Mathf.Sin(t * 2.3f + ph) * 4f;       // 上下起伏 ±4°
+                float sway = Mathf.Sin(t * 1.4f + ph * 1.7f) * 7f;   // 左右轻晃 ±7°
+                cloth.localRotation = Quaternion.Euler(FlagTilt + up, sway, 0f);
+            }
         }
 
         // 按开关 + 到过状态点亮各港旗标(开关切换 / 进港 / 读档后调用)
@@ -565,6 +665,57 @@ namespace Sea
                 bool show = FlagsOn && (p.Id == homePortId || _cityFlags.Contains(p.Id));
                 if (f.gameObject.activeSelf != show) f.gameObject.SetActive(show);
             }
+        }
+
+        // =============================================================
+        // 探索红旗: 海图上选中一处 → 插旗把船驶到那儿抛锚。一根直杆 + 正红燕尾旗(同城市旗布,
+        //   并入 _flagCloth 队列一起逐帧轻摆) + 水面一圈正红光晕, 远处也一眼认得出这处旗点。
+        // =============================================================
+        void EnsureExploreFlag()
+        {
+            if (_exploreFlag != null) return;
+            var root = new GameObject("explore_flag").transform;
+            root.SetParent(_root, false);
+            root.gameObject.SetActive(false);
+            const float s = 1.2f, baseY = 0.35f;
+            float H = 2.5f * s;              // 杆高(比城市小旗高些, 一眼是"这处就是目标")
+            float L = 2.0f * s;              // 旗伸出长(沿 +Z)
+            float W = 1.05f * s;             // 杆端满高(hoist)
+            var pole = Box(StdMat(ColWoodFlag), new Vector3(0.13f, H, 0.13f));
+            pole.SetParent(root, false);
+            pole.localPosition = new Vector3(0f, baseY + H * 0.5f, 0f);
+            var cloth = PennantMesh(ColRedFlag, L, W * 0.5f);
+            cloth.SetParent(root, false);
+            cloth.localPosition = new Vector3(0f, baseY + H, 0f);
+            cloth.localRotation = Quaternion.Euler(FlagTilt, 0f, 0f);
+            _flagCloth["explore"] = cloth;                 // 并入逐帧轻摆; 专属相位不与别旗同步
+            _flagPhase["explore"] = Mathf.PI * 0.5f;
+
+            var ring = new GameObject("ring").AddComponent<LineRenderer>();
+            ring.transform.SetParent(root, false);
+            var lr = ring.GetComponent<LineRenderer>();
+            lr.useWorldSpace = false;
+            lr.positionCount = 33;
+            for (int i = 0; i <= 32; i++)
+            {
+                float a = i / 32f * Mathf.PI * 2f;
+                lr.SetPosition(i, new Vector3(Mathf.Cos(a) * 1.7f, 0.42f, Mathf.Sin(a) * 1.7f));
+            }
+            lr.loop = true;
+            lr.startColor = lr.endColor = new Color(1f, 0.30f, 0.28f);
+            lr.startWidth = lr.endWidth = 0.09f;
+            lr.material = new Material(Shader.Find("Sprites/Default"));
+            _exploreFlag = root;
+        }
+        void ShowExploreFlag(Vector3 w)
+        {
+            EnsureExploreFlag();
+            _exploreFlag.position = w;
+            _exploreFlag.gameObject.SetActive(true);
+        }
+        void HideExploreFlag()
+        {
+            if (_exploreFlag != null) _exploreFlag.gameObject.SetActive(false);
         }
 
         // 记一个"新到过的城市"(大本营本身除外); 首次记入返回 true
@@ -600,7 +751,7 @@ namespace Sea
             float s = 1f;
             var wood = StdMat(new Color(0.42f, 0.27f, 0.16f));
             var deck = StdMat(new Color(0.56f, 0.38f, 0.20f));
-            var sail = StdMat(new Color(0.92f, 0.90f, 0.84f));
+            var sail = StdMat(new Color(0.99f, 0.98f, 0.93f));   // 白帆(主角船 + 僚舰小帆共用)
             var dark = StdMat(new Color(0.10f, 0.07f, 0.05f));
 
             // 船壳(一个拉伸的长方体打底 + 船首斜切感由一根舷木带出)
@@ -614,9 +765,9 @@ namespace Sea
             var rail = Box(deck, new Vector3(2.4f * s, 0.18f * s, 0.8f * s));
             rail.SetParent(root, false); rail.localPosition = new Vector3(-0.05f * s, 0.38f * s, 0f);
 
-            // 两根桅杆 + 帆(拉长的"翼帆"方片, 从侧面看像三角帆)
-            AddMast(root, sail, new Vector3(-0.5f * s, 0f, 0f), 1.9f * s, 1.4f * s, -0.22f);
-            AddMast(root, sail, new Vector3(0.95f * s, 0f, 0f), 2.3f * s, 1.7f * s, 0.24f);
+            // 两根立起的桅杆, 各挂一面大白帆 —— 帆略斜向天空, 海图俯视也见得到白帆面(不会竖成一条线)
+            AddMast(root, sail, -0.30f * s, 2.6f * s, 1.55f * s, 1.90f * s);   // 主桅(偏中后): 高、帆大
+            AddMast(root, sail,  0.85f * s, 2.10f * s, 1.30f * s, 1.60f * s);  // 前桅: 略矮、帆略小
 
             // 旗杆小三角旗
             var flag = Box(StdMat(new Color(0.85f, 0.28f, 0.24f)), new Vector3(0.28f * s, 0.28f * s, 0.05f));
@@ -637,13 +788,16 @@ namespace Sea
             return root;
         }
 
-        void AddMast(Transform root, Material sailMat, Vector3 pos, float h, float sailH, float heel)
+        // 一面"立起的帆": 一根竖直桅杆 + 挂在桅身上段的一片白帆(横张在船身的薄片: 宽=sailW、高=sailH)。
+        //   帆的姿态(斜向天空 ~26°, 见 SetSailsRaised)让帆面朝上 —— 高空海图俯视是一面白帆。
+        void AddMast(Transform root, Material sailMat, float x, float h, float sailH, float sailW)
         {
-            var mast = Box(StdMat(new Color(0.3f, 0.22f, 0.12f)), new Vector3(0.09f, h, 0.09f));
-            mast.SetParent(root, false); mast.localPosition = pos + new Vector3(0f, h * 0.5f, 0f);
-            var sail = Box(sailMat, new Vector3(0.06f, sailH, sailH * 0.9f));
+            var mast = Box(StdMat(new Color(0.30f, 0.22f, 0.12f)), new Vector3(0.08f, h, 0.08f));
+            mast.SetParent(root, false); mast.localPosition = new Vector3(x, h * 0.5f, 0f);
+            float centerY = Mathf.Max(0.6f, h * 0.9f - sailH * 0.5f);   // 帆中心: 顶端贴近桅顶, 底不拖到甲板下
+            var sail = Box(sailMat, new Vector3(0.10f, sailH, sailW));
             sail.SetParent(root, false);
-            sail.localPosition = pos + new Vector3(0.06f, h - sailH * 0.45f, heel);
+            sail.localPosition = new Vector3(x, centerY, 0f);
             _shipSails.Add(sail);
         }
 
@@ -673,21 +827,33 @@ namespace Sea
             // 泊港时轻晃 + 前进方向朝向洋流(顺手朝东)
             _ship.position = basePos + new Vector3(Mathf.Sin(t * 0.6f) * 0.12f, 0.03f, Mathf.Cos(t * 0.7f) * 0.10f);
             _ship.rotation = Quaternion.Euler(0f, -20f + Mathf.Sin(t * 0.4f) * 4f, 0f);
-            // 帆放下(收帆视觉: 垂直轴缩成 0)
-            SetSailsRaised(false, t);
+            // 白帆始终扬着(靠港也满帆) —— 让主角的船一眼是"立桅 + 白帆"的模样
+            SetSailsRaised(true, t);
         }
 
+        // 帆的姿态: 主角船随时扬着白帆, 不再收帆压平; 每面帆绕 z(船身左右)斜 ~SailLean, 帆面朝上,
+        // 高空俯视看得到整片白帆而非一条竖线; 随时间叠极轻的"吃风鼓胀"起伏。
         void SetSailsRaised(bool raised, float t)
         {
-            float k = raised ? 1f : 0.12f;
+            const float SailLean = 26f;
             foreach (var s in _shipSails)
             {
                 if (s == null) continue;
-                // 展开时帆面只微微前倾, 不再左右甩动(去"瞎摇摆"); 收帆时压平
-                s.localRotation = Quaternion.Euler(raised ? 8f : -70f, 0f, 0f);
+                s.localRotation = Quaternion.Euler(raised ? 6f : 4f, 0f, SailLean);
                 var lc = s.localScale;
-                s.localScale = new Vector3(lc.x, lc.y, lc.z * (0.4f + 0.6f * k));
+                lc.z = 1f + Mathf.Sin(t * 1.6f) * 0.05f;
+                s.localScale = lc;
             }
+        }
+
+        // 海上抛锚: 船就在 _anchor 旗点下随波轻晃(不挪开锚地中心), 白帆照扬
+        void AnchorBob(float t)
+        {
+            if (_ship == null) return;
+            _ship.position = _anchor + new Vector3(Mathf.Sin(t * 0.55f) * 0.10f,
+                0.03f + Mathf.Sin(t * 0.8f) * 0.015f, Mathf.Cos(t * 0.45f) * 0.08f);
+            _ship.rotation = Quaternion.Euler(0f, Mathf.Sin(t * 0.3f) * 4f, 0f);
+            SetSailsRaised(true, t);
         }
 
         // =============================================================
@@ -768,7 +934,8 @@ namespace Sea
                 {
                     bool wasPan = _dragPan;
                     _downHeld = false; _dragPan = false;
-                    if (!wasPan && State == Mode.Docked && !PointerOverUi()) PickPortAt(Input.mousePosition);
+                    // 停着(泊港/抛锚)点选: 港球=去那座城; 海面=插红旗自由探索
+                    if (!wasPan && State != Mode.Sailing && !PointerOverUi()) PickAt(Input.mousePosition);
                 }
             }
 
@@ -808,16 +975,47 @@ namespace Sea
             return _target;   // 极边缘没打到地面时保持不动
         }
 
-        void PickPortAt(Vector2 screen)
+        // 点选(停着时): 点中港口光球 = 设那座城为目标; 没点中港球且点在海上 = 插红旗自由探索
+        void PickAt(Vector2 screen)
         {
+            if (State != Mode.Docked && State != Mode.Anchored) return;
             var ray = _cam.ScreenPointToRay(screen);
             if (Physics.Raycast(ray, out var hit, 4000f) && hit.collider != null)
             {
-                var pid = hit.collider.gameObject.name;
-                var p = world.FindPort(pid);
-                if (p != null && p != Current) { Dest = p; PushLog("航线目标: " + p.Name + "(" + p.Area.Name + ")"); }
-                else if (p != null) Banner = "已在 " + p.Name + " 港";
+                var p = world.FindPort(hit.collider.gameObject.name);
+                if (p != null)
+                {
+                    // 泊港时点"自己正停着的那颗"没意义; 抛锚在外时当前港也算远处一座城, 可以回航
+                    if (State == Mode.Docked && p == Current) { Banner = "已在 " + p.Name + " 港"; return; }
+                    SetPortTarget(p);
+                    return;
+                }
             }
+            TryPlantSeaFlag(screen);
+        }
+
+        void SetPortTarget(Port p)
+        {
+            Dest = p;
+            if (ExploreSet) { ExploreSet = false; HideExploreFlag(); }
+            // 黑雾不锁航线: 就算港还埋在雾里也能凭海图朝它驶去(路经迷雾沿途会被一步步揭开)
+            PushLog(CityRevealed(p)
+                ? "航线目标: " + p.Name + "(" + p.Area.Name + ")"
+                : "朝 " + p.Name + " 进发 —— 那片海雾还没散, 一路驶过去把航道探开。");
+        }
+
+        // 光标落点须在海上: 把红旗插到那儿, 并设为下一个出航目标(可反复点海面挪旗)
+        void TryPlantSeaFlag(Vector2 screen)
+        {
+            var g = GroundAtScreen(screen);
+            double lon = Mathf.Clamp(g.x, (float)SeaMapGen.Lon0, (float)SeaMapGen.Lon1);
+            double lat = Mathf.Clamp(-g.z, (float)SeaMapGen.Lat0, (float)SeaMapGen.Lat1);
+            if (SeaMapGen.LandAt(lon, lat)) { Banner = "那是陆地 —— 点一处海面才能插旗驶去。"; return; }
+            Dest = null;
+            ExploreWorld = new Vector3((float)lon, 0f, (float)-lat);
+            ExploreSet = true;
+            ShowExploreFlag(ExploreWorld);
+            PushLog("🚩 海面插旗: 船将驶向这处(不是港口, 到点抛锚)。点别处海面可挪旗; 点发光圆球则改去那座城。");
         }
 
         // 海图镜头: 相机摆在焦点正南高空(_dist 远处, _pitch 高俯角), 视线朝北看 → 世界"北在上、东在右",
@@ -837,22 +1035,60 @@ namespace Sea
         // =============================================================
         public void SetDestination(Port p)
         {
-            if (State != Mode.Docked) return;
+            if (State != Mode.Docked && State != Mode.Anchored) return;
             Dest = p;
+            if (ExploreSet) { ExploreSet = false; HideExploreFlag(); }
             PushLog("航线目标: " + p.Name + " · " + p.Area.Name);
+        }
+
+        // 出航起点: 泊港 = 精确港位; 海上抛锚 = 船在旗点下停稳处 —— 从哪儿起锚就从哪儿算海路
+        Vector3 VoyOrigin()
+        {
+            if (State == Mode.Docked && Current != null) return LonLatToWorld(Current);
+            return _ship != null ? new Vector3(_ship.position.x, 0f, _ship.position.z) : Vector3.zero;
+        }
+
+        static string RouteCacheKey(Vector3 a, Vector3 b)
+        {
+            int ax = Mathf.RoundToInt(a.x * 10f), az = Mathf.RoundToInt(-a.z * 10f);
+            int bx = Mathf.RoundToInt(b.x * 10f), bz = Mathf.RoundToInt(-b.z * 10f);
+            return ax + "_" + az + ">" + bx + "_" + bz;
+        }
+
+        // 起终点航程日数(走绕陆海路; 吸不到海格/找不到路才退直线)
+        int DaysFor(Vector3 from, Vector3 to)
+        {
+            var rt = SeaRoute.Route(from.x, -from.z, to.x, -to.z, RouteCacheKey(from, to));
+            float deg = rt != null ? rt.Total : Vector3.Distance(from, to);
+            float speed = Mathf.Max(1f, fleet != null ? FleetTopSpeed() : 8f);
+            return Mathf.Max(1, Mathf.CeilToInt(deg * 3f / speed));
+        }
+
+        // 当前已选目标(城或旗点)到出航点的航程日数 —— HUD 引导 / 出航前检查共用
+        public int TargetDays
+        {
+            get
+            {
+                if (!HasSailTarget || _ship == null) return 0;
+                Vector3 to = Dest != null ? LonLatToWorld(Dest) : ExploreWorld;
+                return DaysFor(VoyOrigin(), to);
+            }
         }
 
         public void Depart()
         {
-            if (State != Mode.Docked || Dest == null) return;
+            bool fromPort = State == Mode.Docked;                 // 抛锚出航也算合法(海图点续航)
+            if ((!fromPort && State != Mode.Anchored) || !HasSailTarget) return;
             if (fleet.TotalCrew() <= 0) { Banner = "没有水手, 无法出航"; return; }
 
-            _route = SeaRoute.Get(Current, Dest);          // 沿海/绕陆海路(船不走陆地)
-            PlannedDays = TravelDays(Current, Dest);
-            DepartWorld = new Vector3(_ship.position.x, 0f, _ship.position.z);
-            var dw = LonLatToWorld(Dest);
-            DestWorld = new Vector3(dw.x, 0f, dw.z);
-            _departAreaId = Current.Area.Id;
+            bool toPort = Dest != null;
+            DepartWorld = VoyOrigin();
+            if (toPort) { var dw = LonLatToWorld(Dest); DestWorld = new Vector3(dw.x, 0f, dw.z); }
+            else DestWorld = ExploreWorld;                        // 探索目标: 海图插旗点(到点抛锚)
+            _route = SeaRoute.Route(DepartWorld.x, -DepartWorld.z, DestWorld.x, -DestWorld.z,
+                                    RouteCacheKey(DepartWorld, DestWorld));   // 沿海/绕陆海路(船不走陆地)
+            PlannedDays = DaysFor(DepartWorld, DestWorld);
+            _departAreaId = Current != null ? Current.Area.Id : _departAreaId;
             _voyageT = 0f;
             DaysDone = 0;
             SailProgress01 = 0f;
@@ -867,21 +1103,21 @@ namespace Sea
                 _ship.rotation = Quaternion.LookRotation(d0.normalized, Vector3.up) * Quaternion.Euler(0f, -90f, 0f);
                 _ship.position = new Vector3(_ship.position.x, 0.05f, _ship.position.z);
             }
-            _target = DepartWorld + (DestWorld - DepartWorld) * 0.5f; // 相机跟船, 从出发港看
+            _target = DepartWorld + (DestWorld - DepartWorld) * 0.5f; // 相机跟船, 从出发处看
             float span = Vector3.Distance(DepartWorld, DestWorld);
             _dist = Mathf.Clamp(Mathf.Max(span, _route != null ? _route.Total * 0.45f : 0f) * 0.9f, 16f, 210f);
-            PushLog("出航! " + Current.Name + " → " + Dest.Name + ", 预计 " + PlannedDays + " 日(沿海航线)");
+            string fromName = fromPort && Current != null ? Current.Name : "海上锚地";
+            string toName = toPort ? Dest.Name : "海图 🚩 目标点";
+            PushLog("出航! " + fromName + " → " + toName + ", 预计 " + PlannedDays + " 日(沿海航线"
+                    + (toPort ? "" : " · 到点抛锚") + ")");
             if (FleetOps.EnduranceDays(fleet) <= PlannedDays)
                 Banner = "⚠ 口粮可能不够撑 " + PlannedDays + " 日, 请掂量!";
         }
 
         public int TravelDays(Port a, Port b)
         {
-            float deg;
-            var r = a != null && b != null ? SeaRoute.Get(a, b) : null;
-            deg = r != null ? r.Total : Vector3.Distance(LonLatToWorld(a), LonLatToWorld(b));
-            float speed = Mathf.Max(1f, fleet != null ? FleetTopSpeed() : 8f);
-            return Mathf.Max(1, Mathf.CeilToInt(deg * 3f / speed));
+            if (a == null || b == null) return 0;
+            return DaysFor(LonLatToWorld(a), LonLatToWorld(b));
         }
 
         // 沿海路折线上的参数点(u=0..1 按航程弧长分布); 无海路时退化为直线
@@ -915,7 +1151,7 @@ namespace Sea
 
         void TickSailing()
         {
-            if (Dest == null) { State = Mode.Docked; return; }
+            if (!HasSailTarget) { State = Current != null ? Mode.Docked : Mode.Anchored; return; }
             float totalT = Mathf.Clamp(PlannedDays * 0.24f, 3f, 13f);
             _voyageT += Time.deltaTime;
             float p = Mathf.Clamp01(_voyageT / totalT);
@@ -984,22 +1220,38 @@ namespace Sea
 
         void Arrive()
         {
-            var arrive = Dest;
-            State = Mode.Docked;
-            Dest = null;
-            Current = arrive;
+            var arrive = Dest;                 // 空 = 这次目标是海图旗点(探索), 不是港
             DaysDone = PlannedDays;
             SailProgress01 = 1f;
-            _target = LonLatToWorld(arrive);
-            _dist = Mathf.Min(_dist, 60f);   // 到港落稳, 推近到港区
-            PlaceShipAt(arrive, Time.time);
-            long wage = FleetOps.SettleAtPort(fleet, arrive.Id);
-            PushLog("抵达 " + arrive.Name + "。进港结算工资 " + Money(wage) + ", 士气恢复, 伤号已治。");
-            // 红旗照记(不因开关关着就漏记; 开关随时可打开补显); 只有开着时才广播日志
-            if (MarkCityVisited(arrive.Id) && FlagsOn)
-                PushLog("🚩 头回踏足 " + arrive.Name + " —— 已给它插上一面小红旗。");
-            ApplyCityFlags();
-            Banner = "已抵达 " + arrive.Name;
+            if (arrive != null)                // —— 到港: 照旧进港结算 / 治病 / 记到过 ——
+            {
+                State = Mode.Docked;
+                Dest = null;
+                Current = arrive;
+                if (ExploreSet) { ExploreSet = false; HideExploreFlag(); }
+                _target = LonLatToWorld(arrive);
+                _dist = Mathf.Min(_dist, 60f);   // 到港落稳, 推近到港区
+                PlaceShipAt(arrive, Time.time);
+                long wage = FleetOps.SettleAtPort(fleet, arrive.Id);
+                PushLog("抵达 " + arrive.Name + "。进港结算工资 " + Money(wage) + ", 士气恢复, 伤号已治。");
+                // 红旗照记(不因开关关着就漏记; 开关随时可打开补显); 只有开着时才广播日志
+                if (MarkCityVisited(arrive.Id) && FlagsOn)
+                    PushLog("🚩 头回踏足 " + arrive.Name + " —— 已给它插上一面小红旗。");
+                ApplyCityFlags();
+                Banner = "已抵达 " + arrive.Name;
+            }
+            else                               // —— 到海上旗点: 抛锚停船(不靠港、不结薪) ——
+            {
+                State = Mode.Anchored;
+                Dest = null;
+                _anchor = ExploreWorld;        // 就停在这面旗下
+                ShowExploreFlag(_anchor);      // 红旗就地当"锚地标" —— 告诉玩家船此刻在这儿
+                ExploreSet = false;            // 已抵达 → 不再算"待出航目标", 另点新目标才再出航
+                _target = _anchor;
+                _dist = Mathf.Min(_dist, 60f);
+                PushLog("抵达 🚩 海图目标点 —— 船已抛锚停稳(海上不结薪)。点一座城驶去做买卖, 或再点海面插新旗继续自由探索。");
+                Banner = "已到目标海面 · 抛锚停泊";
+            }
         }
 
         // =============================================================
@@ -1402,14 +1654,14 @@ namespace Sea
         }
 
 
-        // 报纸"块"生成: 每块是一个可单独排上版面的小单元(晨报速递 / 各地区头 / 每港一段),
-        // 返回正文含 <size> 富文本(发刊那一刻的行情)。SeaHud 分页时按块堆排成报纸版面。
+        // 报纸"块"生成: 每块是一个可单独排上版面的小单元(卷首语 / 晨报速递 / 每港一段),
+        // 分港行市 = 各港一块平铺, 所属大陆只作城名后的小标签(不再按大陆分段)。
+        // 返回正文含 <size> 富文本(发刊那一刻的行情)。SeaHud 分页时按块排成报纸版面。
         List<string> IntelPaperBlocks()
         {
             var blocks = new List<string>();
             var en = engine; var goods = world.Goods; int G = goods.Count;
             var sb = new System.Text.StringBuilder(512);
-            string lastArea = null;
 
             void Line(string s) { sb.Append(s).Append('\n'); }
             void Flush()
@@ -1475,25 +1727,21 @@ namespace Sea
                 Line("<size=11>  · 把 <b>" + needs[i].Good + "</b> 运去 <color=#9E4A24>" + needs[i].City + "</color>  求 <color=#3C6B48>" + needs[i].Bid + "</color> 金 · 约可收 " + needs[i].Depth + " 件 · 单件毛利约 <color=#9E4A24>" + needs[i].Margin + "</color> 金</size>");
             Flush();
 
-            // 三) 分港行市: 按航区分段, 地区头 + 每港各成一块 → 版面整段排、可跨版续排
+            // 三) 分港行市: 各港一块(城块), 交给 SeaHud 按「头版之后: 每版 4 栏 × 每栏至多 3 城」排行情版。
+            //      行文紧凑到一货一行: 城名首行(◆ 城 大小·海域小注), 下面 ●特产(供=供货价 / 存=存量)、
+            //      ▲缺货(求=求购价 / 约收=可收件数)各一行 —— 一行一货基本不折行, 窄栏里也好稳稳叠 3 城。
+            //      全报字号在 SeaHud 分页时统一, 这里不写 <size> 只留色/粗体。
             foreach (var p in world.Ports)
             {
                 string an = p.Area != null ? p.Area.Name : "未知海域";
-                if (an != lastArea)
-                {
-                    Flush();
-                    sb.Length = 0;
-                    Line("<size=15><color=#1A4553><b>━━ " + an + " ━━</b></color></size>");
-                    lastArea = an;
-                }
+                string sz = p.Size >= 3 ? "大港" : p.Size == 2 ? "中港" : "小港";
                 if (p.Blocked)
                 {
-                    Line("<size=12><color=#A03A24><b>✖ " + p.Name + "</b> —— 大事件封锁, 今日停市。</color></size>");
+                    Line("<b>✖ " + p.Name + "</b>  <color=#8A6D3F>" + sz + " · " + an + "</color>  <color=#A03A24>大事件封锁 · 今日停市</color>");
                     Flush();
                     continue;
                 }
-                Line("<size=12><color=#1A4553><b>◆ " + p.Name + "</b>"
-                    + (p.Size >= 3 ? "  大港" : p.Size == 2 ? "  中港" : "  小港") + "</color></size>");
+                Line("<b>◆ " + p.Name + "</b>  <color=#8A6D3F>" + sz + " · " + an + "</color>");
                 var specIdx = new List<int>();
                 for (int s = 0; s < (p.Specialties != null ? p.Specialties.Length : 0); s++)
                 {
@@ -1504,7 +1752,7 @@ namespace Sea
                 for (int s = 0; s < specIdx.Count; s++)
                 {
                     var g = goods[specIdx[s]];
-                    Line("<size=11>  <color=#3C6B48>● 特产</color> <b>" + g.Name + "</b>  供货 <color=#9E4A24>" + en.AskPrice(p, g) + "</color> 金 · 存量 " + en.BuyStock(p, g) + " 件</size>");
+                    Line("  <color=#3C6B48>●</color> 特产 <b>" + g.Name + "</b>  供 " + en.AskPrice(p, g) + " · 存 " + en.BuyStock(p, g));
                 }
                 var impIdx = new List<int>();
                 for (int s = 0; s < (p.Imports != null ? p.Imports.Length : 0); s++)
@@ -1516,7 +1764,7 @@ namespace Sea
                 for (int s = 0; s < impIdx.Count; s++)
                 {
                     var g = goods[impIdx[s]];
-                    Line("<size=11>  <color=#9E4A24>▲ 缺货</color> <b>" + g.Name + "</b>  求购 <color=#3C6B48>" + en.BidPrice(p, g) + "</color> 金 · 约可收 " + IntelDepth(p, g) + " 件</size>");
+                    Line("  <color=#9E4A24>▲</color> 缺货 <b>" + g.Name + "</b>  求 " + en.BidPrice(p, g) + " · 约收 " + IntelDepth(p, g));
                 }
                 Flush();
             }
@@ -1746,6 +1994,8 @@ namespace Sea
                 // 地图旗标: 设置开关 + 到过的城市
                 d.flagsOn = FlagsOn;
                 if (_cityFlags.Count > 0) d.flagVisited = new List<string>(_cityFlags);
+                // 黑雾: 已探明网格压成位图(base64; 全黑存空串)
+                d.fog = _fog != null ? _fog.EncodeState() : "";
                 var json = JsonUtility.ToJson(d);
                 System.IO.File.WriteAllText(SavePath(), json);
                 PushLog("已存档: " + engine.Year + " 年, 在 " + Current.Name + ", 现金 " + Money(fleet.Gold));
@@ -1838,6 +2088,8 @@ namespace Sea
                 if (Current == null) Current = world.FindPort(homePortId);
                 if (Current == null) Current = world.Ports[0];
                 Dest = null; State = Mode.Docked;
+                ExploreSet = false; ExploreWorld = Vector3.zero;
+                _anchor = Vector3.zero; HideExploreFlag();   // 探索是临时目标, 存档不带
                 PlannedDays = 0; DaysDone = 0; SailProgress01 = 0f;
                 StartWorth = d.startWorth;
                 // 地图旗标: 设置开关 + 到过城市(红旗), 随档恢复
@@ -1853,6 +2105,23 @@ namespace Sea
                 PushLog("已载入存档 · " + engine.Year + " 年 " + Current.Name + " · 现金 " + Money(fleet.Gold));
                 Banner = "📂 已载入进度。";
                 PlaceShipAt(Current, Time.time);
+                // 黑雾: 以档为准恢复已探明区域。
+                //   新档直接还原海图; 无 fog 字段的旧档 → 至少让"到过的城"在雾里现形一圈(老玩家地图不被清零),
+                //   随后的 Update 还会在当前位置继续现形。
+                if (_fog != null)
+                {
+                    bool hadFog = !string.IsNullOrEmpty(d.fog);
+                    _fog.DecodeState(d.fog);
+                    if (!hadFog && _cityFlags.Count > 0)
+                        foreach (var id in _cityFlags)
+                        {
+                            var pp = world.FindPort(id);
+                            if (pp == null) continue;
+                            var w = LonLatToWorld(pp);
+                            _fog.RevealAt(w.x, w.z, FogDockR);
+                        }
+                    _fog.Flush();
+                }
                 FrameHome(); ApplyCamera(_target);
                 _histAsk.Clear(); _histDay.Clear();   // 情报档案按读档后的日子重记
                 SnapMarketDay();

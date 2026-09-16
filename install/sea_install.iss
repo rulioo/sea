@@ -1,14 +1,14 @@
 ﻿; ============================================================
 ;  SEA 大航海时代2026 · Windows 安装包脚本 (Inno Setup 6)
 ;  用 ISCC 编译:  ISCC.exe sea_install.iss
-;  产物:         大航海时代2026_Setup_v0.1.0.exe (放本目录)
+;  产物:         大航海时代2026_Setup_v0.2.0.exe (放本目录)
 ;  注: 本文件含中文, 必须存为 UTF-8 with BOM (Inno 按 ANSI 读)。
 ; ============================================================
 
 [Setup]
 AppId={{8F1D4E5A-6B2C-4E7D-9A10-2F3C4D5E6F70}
 AppName=大航海时代2026
-AppVersion=0.1.0
+AppVersion=0.2.0
 AppPublisher=SEA (rulioo)
 AppPublisherURL=https://github.com/rulioo/sea
 AppSupportURL=https://github.com/rulioo/sea
@@ -30,7 +30,7 @@ Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
 OutputDir=.
-OutputBaseFilename=大航海时代2026_Setup_v0.1.0
+OutputBaseFilename=大航海时代2026_Setup_v0.2.0
 
 ; 注: 向导默认英文 UI (本 Inno 未附简中 .isl); 产品/游戏文案均为中文。
 [Tasks]

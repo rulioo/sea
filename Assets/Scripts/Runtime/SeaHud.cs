@@ -1325,10 +1325,11 @@ namespace Sea
             const float InsetX = 4f;
             const float RowPitch = 26f;
 
-            // 数据列(滚动内容坐标): 商品 / 买价 / 卖价 / 成本(自己持仓的均价) / 持有 / 库存
+            // 数据列(滚动内容坐标): 商品 / 库存 / 买价 / 售价 / 持有 / 成本(自己持仓的均价)
+            //   左起 = 看货(是什么、港里有多少、进出什么价), 右起 = 自己(手里几件、什么成本) —— 一眼从"看货"扫到"我的账"。
             float[] cx = { 6f, 184f, 254f, 324f, 396f, 460f };
             float[] cw = { 170f, 62f, 62f, 64f, 56f, 56f };
-            string[] cn = { "商品", "买价", "卖价", "成本", "持有", "库存" };
+            string[] cn = { "商品", "库存", "买价", "售价", "持有", "成本" };
             TextAnchor[] ca = {
                 TextAnchor.MiddleLeft, TextAnchor.MiddleRight, TextAnchor.MiddleRight,
                 TextAnchor.MiddleRight, TextAnchor.MiddleRight, TextAnchor.MiddleRight };
@@ -1392,13 +1393,14 @@ namespace Sea
                 var pick = band.gameObject.AddComponent<SeaRowPick>();
                 pick.hud = this; pick.index = i;
 
-                var nm = RowCell(row, "", 15, ColTxt, TextAnchor.MiddleLeft, cx[0], cw[0]);
-                var ak = RowCell(row, "", 15, Color.white, TextAnchor.MiddleRight, cx[1], cw[1]);
-                var bd = RowCell(row, "", 15, Color.white, TextAnchor.MiddleRight, cx[2], cw[2]);
-                var cs = RowCell(row, "", 14, ColDim, TextAnchor.MiddleRight, cx[3], cw[3]);
-                var hd = RowCell(row, "", 14, ColGold, TextAnchor.MiddleRight, cx[4], cw[4]);   // 持有数 金黄
-                var st = RowCell(row, "", 13, ColDim, TextAnchor.MiddleRight, cx[5], cw[5]);
-                _tName.Add(nm); _tAsk.Add(ak); _tBid.Add(bd); _tCost.Add(cs); _tHold.Add(hd); _tStock.Add(st);
+                // 顺序必须与 cn[] 逐列对齐(RefreshTrade 按同名 List 逐行填数)
+                var nm = RowCell(row, "", 15, ColTxt, TextAnchor.MiddleLeft, cx[0], cw[0]);      // 商品
+                var st = RowCell(row, "", 13, ColDim, TextAnchor.MiddleRight, cx[1], cw[1]);     // 库存
+                var ak = RowCell(row, "", 15, Color.white, TextAnchor.MiddleRight, cx[2], cw[2]); // 买价
+                var bd = RowCell(row, "", 15, Color.white, TextAnchor.MiddleRight, cx[3], cw[3]); // 售价
+                var hd = RowCell(row, "", 14, ColGold, TextAnchor.MiddleRight, cx[4], cw[4]);    // 持有数 金黄
+                var cs = RowCell(row, "", 14, ColDim, TextAnchor.MiddleRight, cx[5], cw[5]);     // 成本(持仓均价)
+                _tName.Add(nm); _tStock.Add(st); _tAsk.Add(ak); _tBid.Add(bd); _tHold.Add(hd); _tCost.Add(cs);
 
                 // 买 1 / 买 10 / 全仓
                 var buys = new Button[3];

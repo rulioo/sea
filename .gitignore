@@ -39,5 +39,8 @@ dev/**/*.bak
 dev/**/*.png
 dev/**/*.jpg
 
+# 校验器每次跑完覆写的结论行(如 routes.progress.txt): 每次重跑都会变, 入库只会制造噪声
+dev/**/*.progress.txt
+
 # 安装包产物(可再生, 不入库; 配方 .iss 保留入库)
 /install/*.exe

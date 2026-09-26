@@ -10,7 +10,11 @@ namespace Sea
     [Serializable]
     public class SeaSaveData
     {
-        public int version = 1;
+        // 2 = 球面纪元(海图从平面改成地球仪之后的档)。
+        //   注意: 目前**没有任何读取方按它分支** —— 黑雾自己的格式标签(SeaFog.Tag)已经独立管住了
+        //   "认不认这份雾数据"这件事, 不再需要拿全局版本号去代管一个字段的格式。
+        //   留着它是给以后真要迁移时一个可判的记号, 别把它当成一道已经在工作的闸门。
+        public int version = 2;
 
         // 时钟 / 位置 / 试炼
         public int day;                 // 引擎日历第几天(自 1550-01-01)
@@ -40,7 +44,10 @@ namespace Sea
         public bool flagsOn = true;
         public List<string> flagVisited = new List<string>();
 
-        // 黑雾遮罩: 已探明海图网格(位图→base64; 空 = 尚未探索 / 旧档)
+        // 黑雾遮罩: 已探明海图网格。形如 "F2:180x90:<base64 位图>", 头里带版本与网格尺寸
+        //   (见 SeaFog.EncodeState) —— 尺寸对不上的旧档由 SeaFog.DecodeState 自己拒收,
+        //   读档处随之退回"到过的城各揭一圈"。
+        //   空串 = 尚未探索 / 没有雾数据。
         public string fog = "";
     }
 

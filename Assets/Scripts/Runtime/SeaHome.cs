@@ -122,6 +122,8 @@ namespace Sea
                 new Vector2(0, 26), new Vector2(820, 44));
             _hint.horizontalOverflow = HorizontalWrapMode.Wrap;
 
+            BuildAboutEntry();
+
             BuildAudioCard();
         }
 
@@ -180,6 +182,21 @@ namespace Sea
             RectAt(Rt(b.gameObject), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f),
                 new Vector2(0, y), new Vector2(520, 60));
             return b;
+        }
+
+        // 右下角: 版本号 + 「ℹ 关于」入口 —— 标题画面放版本号是惯例, 顺手让它可点。
+        //   为什么不加成第五颗主钮: 那四颗从 -60 排到 -282(每颗 60 高、间距 74), 下面就是底部提示语,
+        //   再塞一颗只能靠整体上移/压缩, 会顶到 logo。挂右下角不动任何既有版面。
+        void BuildAboutEntry()
+        {
+            var ver = AddText(_mainCard.transform, "v" + Application.version, 14, ColDim, TextAnchor.MiddleRight);
+            RectAt(Rt(ver.gameObject), new Vector2(1, 0), new Vector2(1, 0), new Vector2(1, 0),
+                new Vector2(-130, 18), new Vector2(110, 38));
+
+            var about = MakeBtn(_mainCard.transform, "about", "ℹ 关于", 15, ColBtn, Color.white);
+            RectAt(Rt(about.gameObject), new Vector2(1, 0), new Vector2(1, 0), new Vector2(1, 0),
+                new Vector2(-18, 18), new Vector2(104, 38));
+            about.onClick.AddListener(SeaAbout.Show);
         }
 
         IEnumerator QuitSoon()

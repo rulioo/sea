@@ -33,6 +33,7 @@ namespace Sea
             if (pts.Length < 3) return;
             s_rings.Add(new Ring { name = name, pts = pts });
             RingNames = null;
+            s_ringBox = null;          // 环表变了 → 求交用的包围盒缓存作废(懒重建)
             RefreshNames();
         }
 
@@ -200,12 +201,18 @@ namespace Sea
                 18.6, 42.6,  18.1, 43.5,  17.6, 44.6,  17.5, 45.8));
 
             // ---------------- 阿拉伯半岛(红海东岸→亚丁湾→南岸→阿曼→霍尔木兹→波斯湾→荒漠北缘) ----------------
+            // 注意 55.6/56.4/57.2 这三个点(Musandam 角): 它们和下面 eurasia_sw 的伊朗岸线一起
+            //   夹出霍尔木兹海峡。曾经这里写的是 26.2/26.8/25.6 —— 角尖比同一经度的伊朗岸(26.3)
+            //   还靠北, 两条岸线交叉, 海峡被焊死成一块陆: 波斯湾成了内湖, hormuz 与其余 51 港
+            //   两两不通, A* 全数失败退回直线兜底, 航线从波斯湾直穿大陆到地中海。
+            //   改法: 把角尖压到 25.9, 伊朗岸抬到 26.9, 让出约 0.75°(3 格 @0.25°)的水道。
+            //   改动前务必跑 SeaMenu.校验航线不压陆 —— 海峡一断就是 51 条航线压陆。
             AddLand("arabia", P(
                 43.0, 12.5,  43.2, 13.4,  43.6, 15.0,  42.9, 17.0,  41.9, 19.0,
                 40.9, 21.0,  40.0, 22.5,  39.2, 23.8,  38.5, 25.2,  37.9, 26.6,
                 37.3, 28.0,  36.3, 29.2,  34.9, 29.5,  37.5, 30.5,  40.0, 31.0,
                 43.0, 31.2,  46.0, 30.4,  48.6, 29.9,  48.8, 28.6,  50.0, 27.5,
-                51.4, 26.8,  52.8, 26.5,  54.2, 26.1,  55.6, 26.2,  56.4, 26.8,
+                51.4, 26.8,  52.8, 26.5,  54.2, 26.1,  55.6, 26.0,  56.4, 25.9,
                 57.2, 25.6,  58.3, 24.6,  58.6, 23.6,  58.9, 22.4,  59.2, 21.0,
                 58.5, 19.4,  57.0, 17.8,  55.2, 16.8,  53.3, 16.6,  51.5, 17.0,
                 49.8, 17.8,  48.6, 16.5,  47.4, 15.3,  46.2, 14.1,  45.0, 12.9,
@@ -275,6 +282,8 @@ namespace Sea
 
             // ---------------- 欧亚西南陆(高加索→两河→伊朗→中亚→西藏; 波斯湾北岸+莫克兰海岸为真海岸) ----------------
             // 底缘: 里海并入陆地; 波斯湾保持海(北岸=伊朗); 红海/阿拉伯海在南边由阿拉伯/印度环挡住。
+            // 55.2/56.4/57.2 三点是伊朗侧的霍尔木兹海峡北岸, 与上面 arabia 的 Musandam 角配对 ——
+            //   详见 arabia 那段的注释, 改一个必须同时改另一个, 否则海峡被封死。
             // 四周与 eastmed/arabia/india/asia_ne/eurasia_core 大叠接, 不留缝。
             AddLand("eurasia_sw", P(
                 44.0, 47.9,  43.6, 46.8,  43.1, 45.4,  42.8, 44.0,  42.7, 42.6,
@@ -282,7 +291,7 @@ namespace Sea
                 37.4, 38.4,  37.0, 37.2,  36.6, 36.0,  36.2, 34.8,  36.6, 34.0,
                 37.4, 33.2,  38.4, 32.4,  39.6, 31.8,  41.2, 31.4,  43.0, 31.2,
                 45.0, 30.6,  46.8, 30.0,  48.4, 29.6,  49.6, 28.8,  51.0, 28.0,
-                52.4, 27.4,  53.8, 27.0,  55.2, 26.6,  56.4, 26.3,  57.2, 25.7,
+                52.4, 27.4,  53.8, 27.0,  55.2, 26.7,  56.4, 26.9,  57.2, 26.5,
                 58.6, 25.3,  60.4, 25.1,  62.4, 25.0,  64.4, 24.9,  66.2, 24.9,
                 68.0, 26.0,  69.8, 27.6,  71.8, 29.2,  74.4, 30.4,  77.4, 31.2,
                 80.4, 31.6,  83.2, 31.4,  85.8, 30.4,  88.2, 29.2,  90.4, 28.6,
@@ -374,6 +383,98 @@ namespace Sea
             }
             return inside;
         }
+
+        // =============================================================
+        // 线段压陆判定(精确)
+        //   场景: 航线是两个点之间的折线, 要知道"这一段有没有碰到陆地"。
+        //   曾经用"沿线按 0.1° 采样再逐点 LandAt" —— 采样天生会从比步长还短的陆尖
+        //   两侧跨过去, 实测漏掉过 0.08° 的贴岸(约一条船身长, 画面上就是黄虚线蹭过
+        //   一小截海岸)。而 LandAt 本身是精确的多边形内外判定, 所以这里改用
+        //   线段求交: 判决式的, 不漏。SeaRoute 的抽直与航线校验器都以它为准。
+        // =============================================================
+
+        static float[] s_ringBox;   // 每环 4 个数(minLon/minLat/maxLon/maxLat), 求交前粗筛用
+
+        // 线段是否压陆: 端点落在陆地**内部**, 或与海岸线发生真穿越。
+        //   端点落在海岸线上本身不算 —— 港点和格心都可能正好压在岸线上, 而 LandAt 对边界点的
+        //   内外判定是任意的(恒定的, 但取哪边不由我们定)。见 SegCrossProper 的注释。
+        public static bool SegmentHitsLand(double lon1, double lat1, double lon2, double lat2)
+        {
+            if (s_rings.Count == 0) BuildData();
+            // 端点在陆地内部 → 压陆。港点建在陆上, 于是"进出港那一段"必然判真 —— 对, 那一段
+            //   确实压陆, 只是它不该被画出来(见 SeaPlay.RebuildRouteLine)。
+            if (LandAt(lon1, lat1) || LandAt(lon2, lat2)) return true;
+
+            EnsureRingBoxes();
+            double lox = Math.Min(lon1, lon2), hix = Math.Max(lon1, lon2);
+            double loy = Math.Min(lat1, lat2), hiy = Math.Max(lat1, lat2);
+            for (int r = 0; r < s_rings.Count; r++)
+            {
+                // 粗筛: 环的盒子与线段的盒子不相交 → 这一环整块跳过。跨洋的长弦要面对几百条
+                //   海岸边, 没有这步就是 O(环×边) 逐条算; 有了它绝大多数环一眼挡掉。
+                if (hix < s_ringBox[r * 4] || lox > s_ringBox[r * 4 + 2] ||
+                    hiy < s_ringBox[r * 4 + 1] || loy > s_ringBox[r * 4 + 3]) continue;
+                var p = s_rings[r].pts;
+                for (int i = 0, j = p.Length - 1; i < p.Length; j = i++)
+                    if (SegCrossProper(lon1, lat1, lon2, lat2, p[j][0], p[j][1], p[i][0], p[i][1]))
+                        return true;
+            }
+            return false;
+        }
+
+        static void EnsureRingBoxes()
+        {
+            if (s_ringBox != null && s_ringBox.Length == s_rings.Count * 4) return;
+            s_ringBox = new float[s_rings.Count * 4];
+            for (int r = 0; r < s_rings.Count; r++)
+            {
+                var p = s_rings[r].pts;
+                double x0 = double.MaxValue, y0 = double.MaxValue, x1 = double.MinValue, y1 = double.MinValue;
+                for (int i = 0; i < p.Length; i++)
+                {
+                    double x = p[i][0], y = p[i][1];
+                    if (x < x0) x0 = x;
+                    if (x > x1) x1 = x;
+                    if (y < y0) y0 = y;
+                    if (y > y1) y1 = y;
+                }
+                s_ringBox[r * 4] = (float)x0; s_ringBox[r * 4 + 1] = (float)y0;
+                s_ringBox[r * 4 + 2] = (float)x1; s_ringBox[r * 4 + 3] = (float)y1;
+            }
+        }
+
+        // 两条线段是否"真穿越": 严格跨立(A、B 分居 CD 两侧, 且 C、D 分居 AB 两侧)。
+        //   共线、端点相触这些退化情形一律不算 —— 它们是零宽接触, 不算"穿过了陆地"。
+        //   但**必须**给叉积留一条零带。弦的端点正好落在海岸线上时(格心压岸的海格就是这样),
+        //   Ori 在实数下是 0, 浮点下只剩 ~1e-15 的残差, 而 `> 0` 只看符号 —— 残差是正是负
+        //   纯属舍入运气。实测维拉克鲁斯那格 (-95.875, 19.125) 正好落在海岸边
+        //   (-96.1,19.2)→(-94.6,18.7) 上, 残差恰好为负, 于是"A 在 CD 直线上"被读成"A 跨到了
+        //   CD 另一侧", 连向北/东北/东三条出海方向的弦全判压陆, 该格四面焊死 ——
+        //   洪泛从 25 万格塌成 1 格, 维拉克鲁斯与其余 51 港全不通(A* 失败 51)。见 DiagFlood/DiagCell。
+        //   零带的合法性: 若 AB 的某个端点落在 CD 的**直线**上, 两直线就只交于该点(或重合),
+        //   而它是 AB 的端点、不是内部 —— 严格跨立本就不可能发生, 判"不穿越"是数学上正确的。
+        //   量级: 坐标 ~1e2, 叉积舍入残差 ~1e-14; 任何有意义的跨立都 ≥1e-3。Eps 取 1e-9,
+        //   两边各留五个数量级。
+        //   代价是漏掉"穿过多边形顶点"的弦, 由校验器的细采样复核兜住, 见 ValidateRoutes。
+        static bool SegCrossProper(double ax, double ay, double bx, double by,
+                                   double cx, double cy, double dx, double dy)
+        {
+            const double Eps = 1e-9;
+            double d1 = Ori(cx, cy, dx, dy, ax, ay);
+            if (Math.Abs(d1) <= Eps) return false;    // A 在 CD 直线上 → 至多相触
+            double d2 = Ori(cx, cy, dx, dy, bx, by);
+            if (Math.Abs(d2) <= Eps) return false;    // B 同理
+            if ((d1 > 0) == (d2 > 0)) return false;
+            double d3 = Ori(ax, ay, bx, by, cx, cy);
+            if (Math.Abs(d3) <= Eps) return false;    // C 在 AB 直线上
+            double d4 = Ori(ax, ay, bx, by, dx, dy);
+            if (Math.Abs(d4) <= Eps) return false;    // D 同理
+            return (d3 > 0) != (d4 > 0);
+        }
+
+        // O→A→B 的叉积符号(>0 左转 / <0 右转 / =0 共线)
+        static double Ori(double ox, double oy, double ax, double ay, double bx, double by)
+            => (ax - ox) * (by - oy) - (ay - oy) * (bx - ox);
 
         static int _w, _h;
         static byte[] _rgba;

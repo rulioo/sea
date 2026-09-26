@@ -59,6 +59,15 @@ namespace Sea
         // 行情行高亮: 每行一条透明感应带(悬停微亮 / 点选那行金亮, 避免误操作) —— 感应带排在按钮之下
         readonly List<Image> _rowBand = new List<Image>();
         readonly List<RectTransform> _rowRt = new List<RectTransform>();
+        // **行号 → 货** 的映射(行长 = 货总数的定长表, 由 SortMarketRows 填)。
+        //   为什么要这张表: 行控件是在 BuildTrade 里一次性建好的, 之后再不会增删/挪位;
+        //   而"有持仓的货排在上面"要求**行的顺序 ≠ 数据顺序**。所以让行号永远是行号,
+        //   只在排序那一刻决定"这一行此刻装的是哪件货" —— 两件事解耦, 也就不存在
+        //   "排序之后行控件和它绑定的货对不上号"这类错位。
+        readonly List<Good> _rowGoods = new List<Good>();
+        // 这张表在**进港那一刻**填一次, 之后整个停靠期间钉住不动 ——
+        //   否则买一手货就重排, 鼠标底下的行会当场跳走, 下一击必然点错货。
+        //   只在换港(和首次构建)时重排, 见 Update 的 curIdNow != _lastPort 分支。
         RectTransform _marketVp;
         int _hoverRow = -1, _selRow = -1;
 
@@ -156,6 +165,7 @@ namespace Sea
 
         bool _built;
         string _lastPort = "__";      // 检测"新到一港" → 自动弹行情
+        int _lastVoyage;              // 上一次看到的 SeaPlay.VoyageSerial(开局/读档 = 一次进港)
         bool _goalCongrats;
         float _bannerAt = -99f; string _bannerText = "";
 
@@ -1373,8 +1383,9 @@ namespace Sea
             scroll.content = content;
             _marketVp = vp;   // 行悬停判定: 指针是否落在这块滚动视窗里(滚到哪行就亮哪行)
 
-            int i = 0;
-            foreach (var g in play.world.Goods)
+            // 行数 = 货总数, 一次建足; **每行装哪件货**由 SortMarketRows 决定, 这里只管把行摆好。
+            //   注意行控件不可再增删 —— 排序是"换行里装的东西", 不是"重排行控件"。
+            for (int i = 0; i < play.world.Goods.Count; i++)
             {
                 var row = Rt(NewRT("row" + i, content));
                 row.anchorMin = new Vector2(0, 1); row.anchorMax = new Vector2(1, 1);
@@ -1410,8 +1421,15 @@ namespace Sea
                     var btn = MakeBtn(row, "b" + i + "_" + b, b == 0 ? "买1" : (b == 1 ? "买10" : "全买"),
                         13, ColGoldBtn, new Color(0.15f, 0.09f, 0.04f), clickSfx: false);
                     PlaceRowButton(btn, BuyX + b * 58f);
-                    var gg = g; var q = qty; int ri = i;
-                    btn.onClick.AddListener(() => { _selRow = ri; play.BuyGood(gg, q); });
+                    // **点下去那一刻**才去 _rowGoods 里取货, 而不是建行时把货捕获进来:
+                    //   行号是稳定的, 行里装谁是可变的 —— 捕获旧货的话, 换港重排之后
+                    //   按钮会拿着上一港的行序去买卖风马牛不相及的货。
+                    var q = qty; int ri = i;
+                    btn.onClick.AddListener(() =>
+                    {
+                        if (ri >= _rowGoods.Count) return;
+                        _selRow = ri; play.BuyGood(_rowGoods[ri], q);
+                    });
                     buys[b] = btn;
                 }
                 // 卖 1 / 卖 10 / 全清
@@ -1423,14 +1441,60 @@ namespace Sea
                     var btn = MakeBtn(row, "s" + i + "_" + s, s == 0 ? "卖1" : (s == 1 ? "卖10" : "全卖"),
                         13, ColBtn, Color.white, clickSfx: false);
                     PlaceRowButton(btn, SellX + s * 58f);
-                    var gg = g; var q = qty; int si = i;
-                    btn.onClick.AddListener(() => { _selRow = si; play.SellGood(gg, q); });
+                    var q = qty; int si = i;
+                    btn.onClick.AddListener(() =>
+                    {
+                        if (si >= _rowGoods.Count) return;
+                        _selRow = si; play.SellGood(_rowGoods[si], q);
+                    });
                     sells[s] = btn;
                     sellLbls[s] = btn.GetComponentInChildren<Text>();   // 留住字色引用: 无持仓时整键转暗淡
                 }
                 _buy.Add(buys); _sell.Add(sells); _sellLbl.Add(sellLbls);
-                i++;
             }
+            SortMarketRows();   // 建完先排一次; 之后每次**进港**再排(见 Update 的换港分支)
+        }
+
+        // =============================================================
+        // 行情行序: **手里有货的排在最上面**, 其余按原始数据序跟在后面。
+        //   为什么是"持有"而不是"港内库存": 进港看行情的第一件事是"我这船货在这儿值多少、要不要脱手",
+        //     所以该被顶到眼前的是**我舱里的货**, 不是这座港碰巧囤了什么。
+        //   为什么两趟拷贝而不是 Sort 比较器: List.Sort 不稳定, 同组内会乱序 ——
+        //     行与行之间来回换位会让熟悉了位置的人每次都重新找货。两趟拷贝是**稳定分堆**, 组内保持原序。
+        //   调用时机 = 只在这一刻: 进港 / 首次构建。买卖途中**绝不**重排 —— 否则买一手货行就跳走,
+        //     鼠标底下的那行换了货, 下一次点击必然买错东西。
+        // =============================================================
+        void SortMarketRows()
+        {
+            var all = play.world.Goods;
+            _rowGoods.Clear();
+            for (int k = 0; k < all.Count; k++)
+                if (play.GoodInHold(all[k].Id) > 0) _rowGoods.Add(all[k]);
+            for (int k = 0; k < all.Count; k++)
+                if (play.GoodInHold(all[k].Id) <= 0) _rowGoods.Add(all[k]);
+            // 行序变了, 旧的"选中/悬停行号"指着的是别的货了 —— 清掉, 免得高亮停在不相干的货上
+            _selRow = -1; _hoverRow = -1;
+        }
+
+        // =============================================================
+        // 下面两个方法**只给无头截图闸门(SeaShot)用**, 正常玩法里没有任何调用点。
+        //   为什么需要: 到港会自动弹开行情表, 而截图要判的恰恰是"球画对没有 / 货排对没有"——
+        //   不收起来就只截得到一张表格, 球整颗被盖住, 目视复核无从谈起。
+        //
+        //   为什么是"收浮层"而不是"整块画布 SetActive(false)": **地名标签也挂在这块画布下**,
+        //   整块关掉会连标签一起关掉 —— 而标签的球面朝向与背面剔除(阶段2 改过的那部分)
+        //   正是要看的东西之一。收浮层则球、标签、旗、船全在。
+        // =============================================================
+        public void QaClosePanels()
+        {
+            _tradeOpen = false; _newsOpen = false; _fleetOpen = false;
+            _departOpen = false; _yardOpen = false;
+        }
+
+        // 把行情表叫回眼前。
+        public void QaOpenMarket()
+        {
+            _tradeOpen = true;
         }
 
         // =============================================================
@@ -1609,8 +1673,17 @@ namespace Sea
 
             // --- 舰队情况(浮层; 泊港/航行都能看; 到新港自动弹行情时让位) ---
             string curIdNow = play.Current != null ? play.Current.Id : "";
-            if (docked && curIdNow != _lastPort) { _tradeOpen = true; _fleetOpen = false; _yardOpen = false; _newsOpen = false; }
+            // "进港"有两条来源, 都得排一次:
+            //   ① 海上到港 —— 港口 id 变了;
+            //   ② 开局 / 读档 —— 港口 id 可能**根本没变**(启动首页那几帧 Current 已是母港), 靠 VoyageSerial 认出来。
+            //   少了 ②,"存一份在母港的档再读回来"这条路上手里的货永远排不到最上面。
+            if (docked && (curIdNow != _lastPort || play.VoyageSerial != _lastVoyage))
+            {
+                _tradeOpen = true; _fleetOpen = false; _yardOpen = false; _newsOpen = false;
+                SortMarketRows();   // 进港排一次: 手里有货的置顶, 之后整个停靠期间钉住不重排
+            }
             _lastPort = curIdNow;
+            _lastVoyage = play.VoyageSerial;
             _fleetGo.SetActive(_fleetOpen);
             if (_fleetOpen) RefreshFleet();
 
@@ -1748,10 +1821,11 @@ namespace Sea
             _tradeTitle.text = "本港行情 · " + cur.Name + " · " + cur.Area.Name
                 + "    (◆特产便宜 / ▲这里抢手 → 运到这里来卖)";
 
-            var goods = play.world.Goods;
-            for (int i = 0; i < goods.Count && i < _tName.Count; i++)
+            // 按 **行** 刷, 不是按数据序刷: 第 i 行装的是 _rowGoods[i](排序后可能是任何一件货)。
+            //   行控件与按钮都按行号走, 所以这里是**唯一**需要认表的地方。
+            for (int i = 0; i < _rowGoods.Count && i < _tName.Count; i++)
             {
-                var g = goods[i];
+                var g = _rowGoods[i];
                 int ak = play.engine.AskPrice(cur, g);
                 int bd = play.engine.BidPrice(cur, g);
                 int st = play.engine.BuyStock(cur, g);
@@ -1865,10 +1939,19 @@ namespace Sea
                 if (!_labels.TryGetValue(p.Id, out var lb)) continue;
                 var mt = play.MarkerTransform(p.Id);
                 if (mt == null) { lb.gameObject.SetActive(false); continue; }
-                // 锚点 = 光球顶点(MarkerBallTopY 与 BuildMarker 同源), 再轻微上下浮动
-                Vector3 top = mt.position + Vector3.up * (play.MarkerBallTopY(p) + Mathf.Sin(Time.time * 0.9f + p.Lon) * 0.05f);
+                // 锚点 = 光球顶点(MarkerBallTopY 与 BuildMarker 同源), 再轻微上下浮动。
+                //   港标的局部 +Y 就是该处的地表法线(见 SeaPlay.BuildMarker 挂的球面局部系),
+                //   所以"往球球顶点上方偏"要沿 mt.up, 不能再沿世界 +Y。
+                Vector3 nrm = mt.up;
+                Vector3 top = mt.position + nrm * (play.MarkerBallTopY(p) + Mathf.Sin(Time.time * 0.9f + p.Lon) * 0.05f);
                 Vector3 sp = _cam.WorldToScreenPoint(top);
-                bool behind = sp.z < 0.1f;
+                // 背面判定: WorldToScreenPoint 只是**投影**, 地球另一面的港照样有一个合法屏幕坐标,
+                //   光看 sp.z 挡不住(它们仍在相机前方) → 那些地名会浮在球面上, 像贴在正面的假地名。
+                //   平图时代没有这个问题(没有"另一面")。
+                //   判据用"地表法线与'港→相机'同侧", 而不是"与相机视线同向": 后者在画面边缘
+                //   (fov 60° 的四角)会把明明还看得见的港误判成背面, 一圈港名会莫名其妙消失。
+                bool facing = Vector3.Dot(nrm, _cam.transform.position - mt.position) > 0f;
+                bool behind = sp.z < 0.1f || !facing;
                 bool cursorNear = !behind && Vector2.Distance(new Vector2(sp.x, sp.y), mouse) < 52f;
                 // 浮层(行情/舰队/确认/出航检查)开着 → 所有地名全隐藏(本港/目标/悬停都不出现);
                 // 平时: 当前港 / 目标港 / 鼠标近处 / 大港 常显 —— 但一律还要过了黑雾闸: 未探明的港连名字都不露。

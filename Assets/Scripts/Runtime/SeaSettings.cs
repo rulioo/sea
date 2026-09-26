@@ -176,6 +176,15 @@ namespace Sea
             RectAt(Rt(_mainCard.transform.Find("x").gameObject), new Vector2(1, 1), new Vector2(1, 1),
                 new Vector2(1, 1), new Vector2(-6, -6), new Vector2(46, 38));
 
+            // 「ℹ 关于」挂卡片左上角(与右上角 ✕ 对称)。
+            //   为什么不排在四颗主钮下面: 那串按钮从 -84 一路排到 -282, 再往下 -348/-406 是旗标与
+            //   窗口模式两条、-470 还有提示语 —— 中间插不进去, 硬插就得整卡重排。挂角上既不动既有版面,
+            //   又跟其它设置项同层可达。弹层内容只有一份(SeaAbout), 首页那颗按钮调的是同一个。
+            var about = MakeBtn(_mainCard.transform, "about", "ℹ 关于", 15, ColBtn, Color.white);
+            RectAt(Rt(about.gameObject), new Vector2(0, 1), new Vector2(0, 1),
+                new Vector2(0, 1), new Vector2(6, -6), new Vector2(96, 38));
+            about.onClick.AddListener(SeaAbout.Show);
+
             // 四个主按钮(文字)
             MakeBtn(_mainCard.transform, "save", "💾  保存进度", 20, ColBtn, Color.white);
             RectAt(Rt(_mainCard.transform.Find("save").gameObject), new Vector2(0.5f, 1), new Vector2(0.5f, 1),

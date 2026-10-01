@@ -160,6 +160,14 @@ namespace Sea
         int _qaClickNotes;           // 本次开窗已记条数(封顶, 免得狂点刷屏)
         int _qaAutoAt;               // [闸门] -seaAuto: 第几帧自动开局(<0/0 = 没开这个开关)
         int _qaAutoPickAt;           // [闸门] -seaAuto: 第几帧自动"点一下最远的城"(复现第一次点城那一卡)
+        // [闸门] -seaVoyageQA: 自动点完城**接着真出航**, 整段航程逐帧量"舰队离屏幕中心多少像素"与
+        //   "_dist 变了没有"。为什么非量不可: "舰队恒在屏幕正中"与"缩放纹丝不动"都是**断言**,
+        //   而断言会错 —— 相机那个 ApplyCamera(State==Sailing ? _ship.position : _focus) 摆在
+        //   TickSailing **之前**, 镜头用的其实是上一帧的船位, 天生差一帧; 差多少像素只有量了才知道。
+        bool _qaVoyageOn;            // 采样中
+        int _qaVoyageFrames;         // 采了多少帧
+        float _qaVoyageMaxPx;        // 舰队离屏幕中心最远的一次(像素)
+        float _qaVoyageDistBefore;   // 出航前 _dist(玩家自己滚出来的那个数)
         SeaHud _hud;              // 顶层层闸: 浮层开着时, 底下地图输入(缩放/拖移/点选)全停
         SeaHome _home;            // 启动首页(黑底 logo + 新开航程/继续辉煌/设置/退出)
         SeaSettings _settings;    // 设置弹层(置顶 + 窗口模式; AnyTopOpen 用它闸地图输入/藏地名)
@@ -240,7 +248,7 @@ namespace Sea
             //   等 ~4 秒(240 帧)再开局, 不是等 5 帧: 玩家真实路径是**首页摆着看一会儿**才点「新开航程」,
             //   而 SeaRoute 的栅格正是趁这段时间分帧预建的(SeaRoute.PumpBuild)。开局太早会把
             //   "预建窗口"整个跳掉, 量出来的就不是玩家那条路了。
-            else if (System.Array.IndexOf(Environment.GetCommandLineArgs(), "-seaAuto") >= 0)
+            else if (QaHasFlag("-seaAuto") || QaHasFlag("-seaVoyageQA"))
                 _qaAutoAt = Time.frameCount + 240;
         }
 
@@ -255,6 +263,9 @@ namespace Sea
         //   它只跳过"点首页那个按钮"这一步 —— 那一步与病灶无关; 之后的玩法路径一字不改。
         //   顺带把城坐标打出来, 是因为外部不知道哪座城在屏幕何处; 由游戏自己报, 才不会点空。
         // =============================================================
+        static bool QaHasFlag(string flag) =>
+            System.Array.IndexOf(Environment.GetCommandLineArgs(), flag) >= 0;
+
         void QaAutoPlay()
         {
             StartNewVoyage();
@@ -304,6 +315,63 @@ namespace Sea
                     ? "开局前已建完 " + SeaRoute.MsEnsure.ToString("F0") + "ms, 本次未再付 ✔"
                     : "预建没赶上, 本次同步付了 " + SeaRoute.MsEnsure.ToString("F0") + "ms ✘")
                 + " | A* " + SeaRoute.MsAstar.ToString("F0") + "ms / 展开 " + SeaRoute.AstarExpanded + " 节点");
+            // -seaVoyageQA: 点完城**接着真出航**, 把"舰队居中 / 缩放纹丝不动"这两条断言变成两个数
+            if (QaHasFlag("-seaVoyageQA")) QaVoyageBegin();
+        }
+
+        // =============================================================
+        // [闸门] `-seaVoyageQA`: 出航→到港整段航程, 逐帧量两件事
+        //   ① 舰队离屏幕中心多少像素(最大那次) —— "舰队始终放在屏幕中央"是个断言, 断言会错
+        //   ② _dist 出航前 / 到港后各是多少 —— "不改变玩家 zoom"同理
+        //   闸门本身只提供数, 判词由 QaVoyageReport 按阈值给, 免得"看着差不多"混过去。
+        //   已知的固定误差: Update 里 HandleCamAndPick(摆镜头) 排在 TickSailing(挪船)**前面**,
+        //   镜头拿的是上一帧的船位 —— 每帧差一个"本帧位移投到屏幕上"的距离。这本就是画面实际
+        //   呈现的样子(玩家看到的就是这一帧渲染), 所以照实量, 不替它圆场。
+        // =============================================================
+        void QaVoyageBegin()
+        {
+            // 可选 -seaVoyageZoom=<数>: 出航前先把 _dist 拧到这个值 —— 模拟"玩家自己滚到某个远近再出航"。
+            //   为什么要这个参数: "舰队恒居中"的像素误差随缩放**放大**(同样一段角位移, _dist 越小
+            //   投到屏幕上越远)。只在默认的 78 上量, 恰好挑了个最不容易出错的情形 —— 量了个寂寞。
+            foreach (var a in Environment.GetCommandLineArgs())
+            {
+                const string pre = "-seaVoyageZoom=";
+                float zv;
+                if (a.Length > pre.Length && a.StartsWith(pre)
+                    && float.TryParse(a.Substring(pre.Length), System.Globalization.NumberStyles.Float,
+                                      System.Globalization.CultureInfo.InvariantCulture, out zv))
+                    _dist = Mathf.Clamp(zv, 6f, 160f);
+            }
+            _qaVoyageDistBefore = _dist;
+            _qaVoyageFrames = 0; _qaVoyageMaxPx = 0f;
+            Depart();
+            if (State != Mode.Sailing) { Debug.Log("[SEA] -seaVoyageQA 出航失败(State=" + State + ")"); return; }
+            _qaVoyageOn = true;
+            Debug.Log("[SEA] -seaVoyageQA 出航。出航前 _dist=" + _qaVoyageDistBefore.ToString("F1")
+                + ", 目的地=" + (Dest != null ? Dest.Id : "海图旗点")
+                + ", 预计 " + PlannedDays + " 日");
+        }
+
+        void QaVoyageWatch()
+        {
+            if (!_qaVoyageOn) return;
+            if (State != Mode.Sailing) { QaVoyageReport(); return; }
+            _qaVoyageFrames++;
+            if (_cam == null || _ship == null) return;
+            Vector3 sp = _cam.WorldToScreenPoint(_ship.position);
+            float dx = sp.x - Screen.width * 0.5f, dy = sp.y - Screen.height * 0.5f;
+            float d = Mathf.Sqrt(dx * dx + dy * dy);
+            if (d > _qaVoyageMaxPx) _qaVoyageMaxPx = d;
+        }
+
+        void QaVoyageReport()
+        {
+            _qaVoyageOn = false;
+            float dDist = Mathf.Abs(_dist - _qaVoyageDistBefore);
+            Debug.Log("[SEA] -seaVoyageQA 航程结束(状态=" + State + "): 采样 " + _qaVoyageFrames + " 帧"
+                + " | 舰队离屏心最远 " + _qaVoyageMaxPx.ToString("F1") + "px " + (_qaVoyageMaxPx < 8f ? "✔" : "✘")
+                + " | _dist " + _qaVoyageDistBefore.ToString("F1") + " → " + _dist.ToString("F1")
+                + " (Δ" + dDist.ToString("F2") + ") " + (dDist < 0.01f ? "✔ 缩放未动" : "✘ 缩放被改"));
         }
 
         // =============================================================
@@ -404,6 +472,15 @@ namespace Sea
             if (State == Mode.Sailing) TickSailing();
             else if (State == Mode.Docked) PlaceShipAt(Current, Time.time);
             else AnchorBob(Time.time);   // Anchored: 船在海图点下抛锚, 随波轻晃不挪位
+            // 摆镜头(**第二次**): HandleCamAndPick 里那次用的是**上一帧**的船位, 而船的位移发生在本帧
+            //   的 TickSailing —— 于是画面里的船恒比屏幕中心慢一帧。这一帧的滞后量 = 本帧船走了多远
+            //   投到屏幕上: 常速帧约 2~3px, 一旦碰上卡顿帧就被放大(实测最远 17.6px, 正落在 -
+            //   seaVoyageQA 量到的那个数上)。所以船挪完之后必须再摆一次, 否则"舰队恒在屏幕正中"
+            //   只在帧率稳的时候成立。顺带把 Arrive 改的 _focus 当帧就生效, 免得"到港"那一帧
+            //   还渲染在旧焦点上(同一个毛病的另一张脸)。
+            ApplyCamera(State == Mode.Sailing ? _ship.position : _focus);
+            QaVoyageWatch();             // [闸门] -seaVoyageQA: 摆在 TickSailing **之后** —— 要量的是
+                                         //   这一帧真挪完船之后的状态, 早一步量到的还是上一帧的船
             // 球背面的港球/光环/旗/船会从球缘外面露出来(球体化带出的新毛病) → 逐帧收。
             //   放在"船已经摆好"之后: 这条剔除要读船的位置算朝向, 早一步就慢一帧。
             CullBackside();
@@ -1769,8 +1846,7 @@ namespace Sea
         //   真因是主线程在算寻路栅格(见 SeaRoute.PumpBuild)。留着它是因为这套记录仪对
         //   "点了没反应"这一类症状是通用的第一刀 —— 下次再犯, 加个开关就有现场, 不必重写。
         //   但不能常态开: 它每次左键都要做一次射线 + 球面求交, 还要往日志里写十几行。
-        public static bool ClickLogRequested =>
-            System.Array.IndexOf(Environment.GetCommandLineArgs(), "-seaClickLog") >= 0;
+        public static bool ClickLogRequested => QaHasFlag("-seaClickLog");
 
         public void ArmClickLogFromArgs()
         {
@@ -2156,20 +2232,24 @@ namespace Sea
                 var w0 = VoyOrigin(); var w1 = DestWorld;   // 兜底: 没有海路就用起终点
                 d0 = SeaGlobe.ToWorld(w1.x, -w1.z) - SeaGlobe.ToWorld(w0.x, -w0.z);
             }
-            if (_routePath != null && _routePath.Count >= 1 && _ship != null)
+            // 出航取景: 焦点交给船, **_dist 一个数都不动**。
+            //   玩家点出航之前已经把球转到自己要的角度、滚到自己要的远近 —— 那是他自己调出来的,
+            //   出航凭什么给他改掉。原先这里按航程跨度把 _dist 拉远(最远 78 = 整颗地球), 于是每出航
+            //   一次镜头就被拽走一次: 想看近景航行, 每次都得重滚一遍滚轮。
+            //   现在整段航程 _dist 恒定, 船恒在屏幕正中、球在它底下转 —— 看全局还是看船头, 取决于
+            //   玩家自己滚到哪儿, 而不是取决于这一趟有多远。
+            //   焦点直接摆到**船的起点**, 而不是航程中点: 中点只活得到下一帧(HandleCamAndPick 每帧
+            //   都拿 _ship.position 当焦点), 却会在"点出航"那一帧先渲染一次 —— 看起来就是闪一下。
+            Vector3 startWorld = (_routePath != null && _routePath.Count >= 1)
+                ? SeaGlobe.ToWorld(_routePath[0].x, -_routePath[0].z)
+                : SeaGlobe.ToWorld(DepartWorld.x, -DepartWorld.z);
+            if (_ship != null)
             {
-                Vector3 p0 = SeaGlobe.ToWorld(_routePath[0].x, -_routePath[0].z).normalized * (SeaGlobe.R + 0.05f);
+                Vector3 p0 = startWorld.normalized * (SeaGlobe.R + 0.05f);
                 _ship.position = p0;
                 if (d0.sqrMagnitude > 1e-9f) _ship.rotation = ShipRotationOnGlobe(p0, d0);
             }
-            // 相机跟船, 但初始焦点摆在**航程中点**看: 一步就把出发地与目的地之间的海都框进来。
-            //   中点走大圆(球面), 不是 map 空间的线性平均 —— 远洋航线上线性中点会偏出航线一截。
-            //   _dist 的量纲也跟着换: 平图时代是"离焦点多远", 现在是"离地表多高"; 上限 160 = 滚轮上限,
-            //   下限 6 = 黑雾球壳(R+2.8)之外, 所以出航取景再远也不会把整颗球甩出画面、再近也不会钻进雾壳。
-            Vector3 mid = SeaGlobe.GreatCircleMid(DepartWorld, DestWorld);
-            _focus = SeaGlobe.ToWorld(mid.x, -mid.z);
-            float span = Vector3.Distance(DepartWorld, DestWorld);
-            _dist = Mathf.Clamp(Mathf.Max(span, _route != null ? _route.Total * 0.45f : 0f) * 0.9f, 6f, 78f);
+            _focus = startWorld.normalized * SeaGlobe.R;
             string fromName = fromPort && Current != null ? Current.Name : "海上锚地";
             string toName = toPort ? Dest.Name : "海图 🚩 目标点";
             PushLog("出航! " + fromName + " → " + toName + ", 预计 " + PlannedDays + " 日(沿海航线"
@@ -2321,9 +2401,10 @@ namespace Sea
                 Dest = null;
                 Current = arrive;
                 if (ExploreSet) { ExploreSet = false; HideExploreFlag(); }
-                // 到港落稳 → 推近到港区。只挪焦点不改 _camUp: 玩家自己转出来的朝向别被到港硬掰回去。
+                // 到港落稳 → 焦点回到港位(船也摆在那儿, 于是船仍在屏幕正中)。只挪焦点不改 _camUp:
+                //   玩家自己转出来的朝向别被到港硬掰回去。_dist 照旧**不动** —— 与出航同一条道理:
+                //   整段航程(含抵达这一下)都不该改玩家自己滚出来的缩放。
                 _focus = SeaGlobe.ToWorld(arrive.Lon, arrive.Lat);
-                _dist = Mathf.Min(_dist, 26f);
                 PlaceShipAt(arrive, Time.time);
                 RevealFogAtPort(arrive, FogDockR);   // 到港揭一大圈(泊港不再逐帧揭, 见 Update)
                 long wage = FleetOps.SettleAtPort(fleet, arrive.Id);
@@ -2342,7 +2423,6 @@ namespace Sea
                 ShowExploreFlag(_anchor);      // 红旗就地当"锚地标" —— 告诉玩家船此刻在这儿
                 ExploreSet = false;            // 已抵达 → 不再算"待出航目标", 另点新目标才再出航
                 _focus = SeaGlobe.ToWorld(_anchor.x, -_anchor.z);
-                _dist = Mathf.Min(_dist, 26f);
                 PushLog("抵达 🚩 海图目标点 —— 船已抛锚停稳(海上不结薪)。点一座城驶去做买卖, 或再点海面插新旗继续自由探索。");
                 Banner = "已到目标海面 · 抛锚停泊";
             }

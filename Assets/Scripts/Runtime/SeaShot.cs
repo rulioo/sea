@@ -11,7 +11,7 @@ namespace Sea
     //   而进程照样活着、日志照样干净。"跑 25 秒没崩"这套冒烟对这两种最典型的坏法完全无感 ——
     //   构建出来的**像素**才是唯一能戳穿它的证据。
     //
-    //   用法: Build\SEA.exe -seaShot dev\shots            开局跑一轮, 截 01~03 与 06~08
+    //   用法: Build\SEA.exe -seaShot dev\shots            开局跑一轮, 截 01~03 与 06~09
     //         Build\SEA.exe -seaShot dev\shots load       接着上一轮的存档, 截 04~05
     //   产物: <目录>/01_….png …  (截完看图, 别看日志)
     //
@@ -40,6 +40,10 @@ namespace Sea
             Scrambled,        // 把镜头转乱(换经度 + 滚转): 给"右键摆正"造一个可证伪的起点
             Aligned,          // 右键摆正之后: 应当北上南下、且舰队落在屏幕正中
             About,            // 「关于」弹层: 版本号与作者
+            FleetTen,         // 舰队填到 10 艘: 船卡该张张摆得下、且都不压到「全队合计」
+            FleetSupply,      // 舰队页里点补给/招募 → 确定: 舰队页该自己回来, 且各船报得出给养占了多少仓位
+            MarketScroll,     // 行情翻到底 → 收铺 → 重开: 该自己回到数据第一行(且每帧刷新没把表钉死)
+            LogScroll,        // 航行日志灌满 → 往上翻: 该滚得动、且不被"每帧钉回最新"那条规则拽回去
         }
 
         struct Shot
@@ -58,6 +62,16 @@ namespace Sea
             new Shot { Name = "06_右键前_镜头被转乱",     What = Act.Scrambled },
             new Shot { Name = "07_右键后_北上南下舰队居中", What = Act.Aligned },
             new Shot { Name = "08_关于面板",             What = Act.About },
+            new Shot { Name = "09_舰队十艘_不压合计",     What = Act.FleetTen },
+            // 紧跟 09(船队已是 10 艘、有货): 走"舰队→补给/招募→确定"三个真按钮链路,
+            //   再拍一张 —— 图里既要看到舰队页**自己回来了**, 也要看到每艘船的仓位里给养那一块。
+            new Shot { Name = "10_补给确认后_回舰队页_给养占仓位", What = Act.FleetSupply },
+            // 最后一张: 行情翻到底 → 收铺 → 重开。图里那几行是**排序后的头几行**, 而它上一刻还停在
+            //   最底下 —— 这就是"每次打开都回到数据第一行"的像素证据(日志里另有 pos 前后两行)。
+            new Shot { Name = "11_行情翻到底再重开_应回第一行", What = Act.MarketScroll },
+            // 最后一张: 把日志灌到溢出再往上翻 —— 图里那几行应当**不是**最新那几条, 且右侧滑块
+            //   停在中段(日志量在整轮跑图里正好差 17px 不溢出, 不灌就永远测不到这条路径)。
+            new Shot { Name = "12_航行日志灌满_可往上翻", What = Act.LogScroll },
         };
 
         // 第二轮: 读档 = 一次真实的"进港", 排序在这里生效。
@@ -144,6 +158,14 @@ namespace Sea
                 //   读档那一轮, 到港自动弹行情表发生在我们收完浮层的**下一帧**, 收一次就会被它再顶开。
                 int cur = _step >> 1;
                 if (PanelsClosed(_plan[cur].What)) ClosePanels();
+                // 要"浮层开着"的机位同理得**每帧**再开一次 —— 与上面收浮层同一条道理:
+                //   港/航次一变, Refresh 里那段"到新港自动弹行情"就会把舰队面板顶掉,
+                //   只开一次的话, 这一帧开的、下一帧就没了(截出来是一张空地图)。
+                if (_plan[cur].What == Act.FleetTen && _hud != null) _hud.QaOpenFleet();
+                // 行情滚动探针同理每帧推进一步(它自己按 0.15s 节流, 内部有步数上限, 推完就停)。
+                if (_plan[cur].What == Act.MarketScroll && _hud != null) _hud.QaMarketScrollTick();
+                // 日志滚动探针同理分帧推进(自己按 0.10s 节流, 5 步走完就停)
+                if (_plan[cur].What == Act.LogScroll && _hud != null) _hud.QaLogScrollTick();
                 if (_t < Settle) return;
                 _t = 0f;
                 if ((_step & 1) == 1) Shoot(_plan[cur].Name);
@@ -196,7 +218,10 @@ namespace Sea
 
                 case Act.MarketAfterLoad:
                     // 读档已经触发过一次真实的"进港排序"。手里的货必须挪到最上面两行。
-                    //   (不自己开行情表: 到港本来就会自动弹开, 靠自动的才叫走真路径。)
+                    //   [注意] 这里**必须**自己开行情表。原先靠"读档会自动弹开"省掉这一句 —— 而那个自动弹
+                    //   正是本轮修掉的病(开局/读档不再弹, 免得玩家点第一座城点不动)。留在这里的话这张图
+                    //   会截到一张没有行情表的地图, 排序验证就变成"看不见 = 通过"了, 那是假绿。
+                    //   ViewHome 放在开铺之后: 它每帧都调, 顺手把镜头钉回本港。
                     if (_hud != null) _hud.QaOpenMarket();
                     _play.ViewHome();
                     break;
@@ -215,6 +240,45 @@ namespace Sea
                 case Act.About:
                     _play.ViewHome();
                     SeaAbout.Show();
+                    break;
+
+                case Act.FleetTen:
+                    // 满编 10 艘 + 每船分货(要货单折行那种最长参数块), 再把舰队面板叫出来。
+                    //   为什么非要凑满 10 艘: 这版改的就是"船一多卡片就压合计", 拿 3 艘去截只能证明
+                    //   修好了最小那个病例, 证明不了 8~10 艘(用户点名的那档)也摆得下。
+                    _play.ViewHome();
+                    SeaAbout.Hide();                 // 上一张是「关于」浮层, 不收掉它就盖在这张中间
+                    _play.QaFillFleetTo(10, 30);
+                    if (_hud != null) _hud.QaOpenFleet();
+                    break;
+
+                case Act.MarketScroll:
+                    // 开铺/收铺那几步在 QaMarketScrollTick 里**分帧**走(见那里的注释: 同一帧里
+                    //   关掉再打开不成边沿, 测出来是假失败)。这里只把镜头与浮层摆好。
+                    //   注意本 act **不能**进 PanelsClosed: 每帧 ClosePanels 会把探针刚开的铺又收掉。
+                    _play.ViewHome();
+                    SeaAbout.Hide();
+                    // 这里**不**收浮层: 本 act 的收铺/开铺由探针分帧走(第 0 步就顺手把上一张图
+                    //   开着的舰队页收掉)。Frame() 是在这一格(0.8s)的**末尾**才调的, 在这儿再收一次
+                    //   会把探针刚开好的铺当场关掉 —— 上一版就是这么把第 11 张截成空地图的。
+                    break;
+
+                case Act.LogScroll:
+                    // 灌日志与"往上翻"都交给探针分帧走(见 QaLogScrollTick): 同一帧里灌完就翻,
+                    //   读不出"下一帧有没有被钉回去"。日志卡是常驻的、不归 QaClosePanels 管,
+                    //   所以这里顺手收掉上一张图开着的行情表是安全的(Frame 在本格末尾才调, 探针已跑完)。
+                    _play.ViewHome();
+                    SeaAbout.Hide();
+                    if (_hud != null) _hud.QaClosePanels();
+                    break;
+
+                case Act.FleetSupply:
+                    // 「舰队 → 半仓水手 / 招满水手 / 补给 15 日 / 补给 30 日 → 确定」四条链路各走一遍(真按钮),
+                    //   走完**不**每帧重开舰队页 —— 每帧重开就等于替玩家把"确定之后它自己回不回来"
+                    //   做掉了, 那这张图就证明不了用户报的那个病例。
+                    _play.ViewHome();
+                    SeaAbout.Hide();
+                    if (_hud != null) Debug.Log("[SEA] " + _hud.QaFleetConfirmFlow("all"));
                     break;
             }
         }
@@ -237,6 +301,19 @@ namespace Sea
         void Shoot(string name)
         {
             LogFleetCentering(name);
+            // 按快门前把 HUD 面板的真实状态记一行(舰队面板那张尤其要看: 开着没有、长到多长)
+            Debug.Log("[SEA] 点城闸门[" + name + "] " + (_hud != null ? _hud.QaFirstClickProbe() : "hud=null"));
+            Debug.Log("[SEA] 面板状态[" + name + "] " + (_hud != null ? _hud.QaFleetPanelState() : "hud=null"));
+            Debug.Log("[SEA] 行情滚动[" + name + "] " + (_hud != null ? _hud.QaMarketScrollState() : "hud=null"));
+            // 右侧两张卡(航行日志 / 舰队货仓)能不能滚、滑块露没露 —— 见 SeaHud.QaScrollState
+            Debug.Log("[SEA] 右侧卡[" + name + "] " + (_hud != null ? _hud.QaScrollState() : "hud=null"));
+            // 点城的可点半径(每张都记: 01 是整颗地球、02 是回本港, 两种取景各量一次才看得出"拉远就点不到")
+            Debug.Log("[SEA] 可点半径[" + name + "] " + (_play != null ? _play.QaPickProbe() : "play=null"));
+            // 逐城自检: 不看屏心那一座, 而是**画内每一座**都拿自己的城心去点一次 —— 看有没有点不中的、
+            //   有没有被邻城抢走的。玩家嘴里的"点城不灵"指的是他自己挑的那座, 只有逐城问才问得到。
+            Debug.Log("[SEA] 点城自检[" + name + "] " + (_play != null ? _play.QaPortSelfPickAudit() : "play=null"));
+            // 雾探到了哪儿(每张都记): 开局那几张要看的是"只亮出发点周围一小圈", 这张纸面数字就是证据。
+            Debug.Log("[SEA] 雾[" + name + "] " + (_play != null ? _play.QaFogState() : "play=null"));
             string p = Path.Combine(_dir, name + ".png");
             ScreenCapture.CaptureScreenshot(p);
             Debug.Log("[SEA] 截图: " + Path.GetFullPath(p));

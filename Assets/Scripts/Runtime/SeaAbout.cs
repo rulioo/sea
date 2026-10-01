@@ -44,6 +44,12 @@ namespace Sea
             s_inst.Open();
         }
 
+        // 关掉(与 Show 对称)。给截图闸门连拍两张浮层用 —— 上一张不收掉就会盖在下一张上。
+        public static void Hide()
+        {
+            if (s_inst != null) s_inst.Close();
+        }
+
         void Awake() { s_inst = this; }
 
         // 开关都不自己放音效: 入口按钮是 MakeBtn 造的, 它挂的监听里已经有一声 click 了,

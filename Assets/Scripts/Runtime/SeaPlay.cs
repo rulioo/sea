@@ -88,8 +88,13 @@ namespace Sea
         readonly List<string> _areaOrder = new List<string>();
         SeaFog _fog;                                 // 黑雾遮罩(探索迷雾): 见 SeaFog.cs, 随存读档
         const float FogSailR = 16f;   // 航行时以船位为心揭开"航道条带"半径(两侧探明 ~16°) —— 海图逐程被自己走开
-        const float FogDockR = 40f;   // 靠港/开局以港为心再亮一大圈(40°), 便于看图定下一程
+        const float FogDockR = 40f;   // 到港以港为心亮一大圈(40°), 便于看图定下一程; **只在抵达那一刻**揭一次(见 Arrive)
         const float FogAnchorR = 24f; // 抛锚停船: 在船位再亮一小圈, 够看清下一点(不必像进港那样一大片)
+        // 开局可视范围 = 出发点周围**一小圈**, 不是 40° 的泊港大圈(用户定: 「开局时缩小可视范围, 就出发点周围一小圈」)。
+        //   12° 是照着母港塞维利亚的邻居定的: 里斯本 2.8°、波尔多 8.4° 在圈内(一开局就有两处买卖可去),
+        //   热那亚 13.2°、伦敦 14.7° 在圈外 —— 那些得自己驶过去, 一路把雾走开。
+        //   为什么不用 40°: 那半个地中海开局就是亮的, "探索"这层玩法等于没有。
+        const float FogStartR = 12f;
 
         Transform _exploreFlag;        // 🚩 探索红旗: 选中的海图点 / 抛锚地标(杆+正红燕尾旗+水面红光环)
         Transform _targetFlag;         // 🟢 目标绿旗: 当前选中的出航目标城(随 Dest 自动插/收)
@@ -150,6 +155,11 @@ namespace Sea
         Vector2 _downScreen;
         bool _midHeld;            // 中键按住平移中
         Vector2 _panPrev;         // 上一帧光标位置 → 增量转球用(每帧只转"上一光标→本光标"这一段, 避免旧锚反馈振荡=抖)
+        // [闸门] 左键点击路径记录仪(见 QaClickNote 上方那段说明)。默认开窗, 因为复现路径就是"玩家真手点"。
+        float _qaClickUntil = -1f;   // 开窗截止(Time.realtimeSinceStartup); <0 = 关
+        int _qaClickNotes;           // 本次开窗已记条数(封顶, 免得狂点刷屏)
+        int _qaAutoAt;               // [闸门] -seaAuto: 第几帧自动开局(<0/0 = 没开这个开关)
+        int _qaAutoPickAt;           // [闸门] -seaAuto: 第几帧自动"点一下最远的城"(复现第一次点城那一卡)
         SeaHud _hud;              // 顶层层闸: 浮层开着时, 底下地图输入(缩放/拖移/点选)全停
         SeaHome _home;            // 启动首页(黑底 logo + 新开航程/继续辉煌/设置/退出)
         SeaSettings _settings;    // 设置弹层(置顶 + 窗口模式; AnyTopOpen 用它闸地图输入/藏地名)
@@ -212,16 +222,88 @@ namespace Sea
             }
             BuildWorldVisual();
             BuildFleetVisual();
-            BuildFogVisual();   // 海图盖一层黑雾(初始全黑; 开局在自家港自动现形一圈, 见 Update)
+            BuildFogVisual();   // 海图盖一层黑雾(初始全黑)
+            RevealFogAtPort(Current, FogStartR);   // 开局只揭开出发点周围一小圈, 其余交给玩家自己驶开
             FrameMap();             // 开局先看整颗地球(用户定); 点「回本港」再推近
             ApplyCamera(_focus);    // 首帧: 不等 Update 才摆
             StartWorth = NetWorth();
             PushIntroLogs();
             SnapMarketDay();   // 情报站行情档案从开局当日起逐日留档
+            SeaRoute.WarmUp();   // 见 SeaRoute.PumpBuild: 44 万格的寻路栅格先在首页那几秒里分帧建完,
+                                 //   别等玩家点下第一座城才现算 —— 那一下是 2.2 秒的定格(实测)。
             ShowHome();   // 启动首页: 黑底盖住海图, 由玩家点「新开航程/继续辉煌」才真正开局(首页曲 = head.wav)
             // 无头截图闸门: 带 -seaShot <目录> 启动时才挂(见 SeaShot.cs)。
             //   挂在**这里**是因为它要调 StartNewVoyage/ViewWorld, 得等世界与首页都就位。
             if (SeaShot.Requested()) gameObject.AddComponent<SeaShot>();
+            // [闸门] 见 QaAutoPlay。等 5 帧再动手: 那一刻相机矩阵已经真的应用过一轮,
+            //   WorldToScreenPoint 才作数(Awake 当场算容易拿到还没提交投影矩阵的相机)。
+            //   等 ~4 秒(240 帧)再开局, 不是等 5 帧: 玩家真实路径是**首页摆着看一会儿**才点「新开航程」,
+            //   而 SeaRoute 的栅格正是趁这段时间分帧预建的(SeaRoute.PumpBuild)。开局太早会把
+            //   "预建窗口"整个跳掉, 量出来的就不是玩家那条路了。
+            else if (System.Array.IndexOf(Environment.GetCommandLineArgs(), "-seaAuto") >= 0)
+                _qaAutoAt = Time.frameCount + 240;
+        }
+
+        // =============================================================
+        // [闸门] `-seaAuto`: 跳过启动首页直接开局, 并把**画内每一座城的屏幕坐标**打进日志。
+        //
+        //   为什么本轮的病灶非它不可: 症状是"玩家真手点第一下没反应", 而嫌疑最大的一条是
+        //   **鼠标事件根本没投递到 Input.GetMouseButtonDown**(窗口焦点/输入层) —— 这一层
+        //   恰恰是无头截图闸门永远碰不到的: 截图轮从头到尾没有鼠标, Input 里什么都没有。
+        //   有了这个开关, 外部就能真的挪光标、真的按一下, 让那一次点击走**完整条真路径**,
+        //   再由点击记录仪(QaClickNote)把四道闸门的当场状态记下来。
+        //   它只跳过"点首页那个按钮"这一步 —— 那一步与病灶无关; 之后的玩法路径一字不改。
+        //   顺带把城坐标打出来, 是因为外部不知道哪座城在屏幕何处; 由游戏自己报, 才不会点空。
+        // =============================================================
+        void QaAutoPlay()
+        {
+            StartNewVoyage();
+            if (world == null || _cam == null) { Debug.LogError("[SEA] -seaAuto 开局失败"); return; }
+            var sb = new System.Text.StringBuilder();
+            foreach (var p in world.Ports)
+            {
+                Vector3 pw = SeaGlobe.ToWorld(p.Lon, p.Lat);
+                if (Vector3.Dot(pw.normalized, _cam.transform.position - pw) <= 0f) continue;   // 背半球
+                Vector3 sp = _cam.WorldToScreenPoint(pw);
+                if (sp.z <= 0f) continue;
+                // 离屏幕边缘 60px 以内的不报: 外部要拿它当真鼠标的目标点, 贴边容易点到别的东西上
+                if (sp.x < 60f || sp.x > Screen.width - 60f || sp.y < 60f || sp.y > Screen.height - 60f) continue;
+                sb.Append(p.Id).Append('=').Append((int)sp.x).Append(',').Append((int)sp.y).Append(' ');
+            }
+            Debug.Log("[SEA] -seaAuto 已开局(距地=" + _dist.ToString("F0") + " 屏幕=" + Screen.width + "x" + Screen.height
+                + ")。画内各城屏幕坐标: " + sb);
+            _qaAutoPickAt = Time.frameCount + 150;   // 约 2.5 秒后自动点一次城, 让首帧开销落在一次可量的调用里
+        }
+
+        // [闸门] 自动"点一次最远的城" —— 复现"进游戏第一次点目的地"那一卡。
+        //   故意取**最远**的那座: 航线最长、A* 展开的节点最多、虚线顶点最多, 三个开销都取上界。
+        //   走的是 PickAt(屏幕点) —— 与真鼠标点城**完全同一条代码路径**(港球判定、设目标、重建航线、
+        //   点目标旗), 唯一跳过的就是 Input 那一层, 而那一层已经被排除了(用户实测: 不是没收到, 是卡)。
+        void QaAutoPick()
+        {
+            if (world == null || _cam == null || Current == null) return;
+            Port far = null; float best = -1f;
+            foreach (var p in world.Ports)
+            {
+                if (p == Current) continue;
+                Vector3 pw = SeaGlobe.ToWorld(p.Lon, p.Lat);
+                if (Vector3.Dot(pw.normalized, _cam.transform.position - pw) <= 0f) continue;   // 背半球, 点不到
+                float d = SeaGlobe.GreatCircleDegLonLat(Current.Lon, Current.Lat, p.Lon, p.Lat);
+                if (d > best) { best = d; far = p; }
+            }
+            if (far == null) { Debug.LogError("[SEA] -seaAuto 找不到可点的远港"); return; }
+            Vector3 sp = _cam.WorldToScreenPoint(SeaGlobe.ToWorld(far.Lon, far.Lat));
+            bool gridAlreadyBuilt = SeaRoute.MsEnsure > 0f;   // 预建赶上了没有: 这一行的答案就是修好没修好
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            PickAt(new Vector2(sp.x, sp.y));
+            sw.Stop();
+            Debug.Log("[SEA] -seaAuto 自动点城: " + far.Name + "(" + best.ToString("F0") + "° 外) → "
+                + (Dest != null ? Dest.Id : "null(没选中!)")
+                + " | PickAt 合计 " + sw.Elapsed.TotalMilliseconds.ToString("F0") + "ms"
+                + " | 栅格: " + (gridAlreadyBuilt
+                    ? "开局前已建完 " + SeaRoute.MsEnsure.ToString("F0") + "ms, 本次未再付 ✔"
+                    : "预建没赶上, 本次同步付了 " + SeaRoute.MsEnsure.ToString("F0") + "ms ✘")
+                + " | A* " + SeaRoute.MsAstar.ToString("F0") + "ms / 展开 " + SeaRoute.AstarExpanded + " 节点");
         }
 
         // =============================================================
@@ -246,6 +328,7 @@ namespace Sea
             StartFlagsOn();                            // 启动默认点亮地图旗标(大本营黄旗/到过红旗)
             if (audio != null) audio.PlayBgmDefault();   // 离开主页 → 主题曲(玩家在设置里选过则用所选)
             _home?.Hide();
+            ArmClickLogFromArgs();                     // [闸门] 仅 -seaClickLog 时开窗(见 QaArmClickLog)
         }
 
         // 「继续辉煌」: 读档回上次局面; 没档/坏档留在首页给提示
@@ -257,6 +340,7 @@ namespace Sea
                 StartFlagsOn();                        // 读档起步同样默认点亮旗标
                 if (audio != null) audio.PlayBgmDefault();
                 _home?.Hide();
+                ArmClickLogFromArgs();                 // [闸门] 仅 -seaClickLog 时开窗
             }
             else HomeHint(Banner);
         }
@@ -309,6 +393,11 @@ namespace Sea
         void Update()
         {
             if (world == null || fleet == null) return;
+            SeaRoute.PumpBuild(SeaRoute.PumpSliceMs);   // 推进寻路栅格(建完即空转) —— 每帧 2ms, 看不出来
+            if (_qaAutoAt > 0 && Time.frameCount >= _qaAutoAt) { _qaAutoAt = 0; QaAutoPlay(); }
+            if (_qaAutoPickAt > 0 && Time.frameCount >= _qaAutoPickAt) { _qaAutoPickAt = 0; QaAutoPick(); }
+            QaSlowFrameWatch();
+            QaBeat();
             HandleCamAndPick();
             TickFlagWaver();
             TickRouteLine();   // 计划航线虚线(只在起终点/状态真变时重建)
@@ -318,12 +407,20 @@ namespace Sea
             // 球背面的港球/光环/旗/船会从球缘外面露出来(球体化带出的新毛病) → 逐帧收。
             //   放在"船已经摆好"之后: 这条剔除要读船的位置算朝向, 早一步就慢一帧。
             CullBackside();
-            if (_fog != null && _ship != null)   // 迷雾逐帧以船位为中心揭圈(航行=航道条带; 泊港=视野大圈; 抛锚=中等圈)
+            // 迷雾: 逐帧揭的是**跟着船走**的两种圈(航行=航道条带 16°; 抛锚=中等圈 24°)。
+            //   泊港那圈(40°)不在这儿揭, 改在**抵达那一刻**揭一次(见 Arrive) —— 两个理由:
+            //   ① 开局那圈只有 FogStartR(12°), 逐帧的泊港圈会在开局第一帧就糊上 40°, 小圈活不过一帧;
+            //   ② 读档时雾以档为准(SeaFog.DecodeState), 逐帧的泊港圈会把一份"刚开局"的档顶成 40°,
+            //      档里辛苦走出来的探索进度就这么白存了。
+            if (_fog != null)
             {
-                float rr = State == Mode.Sailing ? FogSailR : State == Mode.Docked ? FogDockR : FogAnchorR;
-                // 船现在活在**球面**上, 雾活在**经纬**里 → 这里必须反推一次(全项目唯一需要的反推点)
-                SeaGlobe.ToLonLat(_ship.position, out double flon, out double flat);
-                _fog.RevealAt((float)flon, (float)flat, rr);   // 雾按经纬抹圈, 且抹的是**球面角半径**(见 SeaFog.RevealAt)
+                if (_ship != null && State != Mode.Docked)
+                {
+                    float rr = State == Mode.Sailing ? FogSailR : FogAnchorR;
+                    // 船现在活在**球面**上, 雾活在**经纬**里 → 这里必须反推一次(全项目唯一需要的反推点)
+                    SeaGlobe.ToLonLat(_ship.position, out double flon, out double flat);
+                    _fog.RevealAt((float)flon, (float)flat, rr);   // 雾按经纬抹圈, 且抹的是**球面角半径**(见 SeaFog.RevealAt)
+                }
                 _fog.Tick(Time.deltaTime);
             }
         }
@@ -345,6 +442,16 @@ namespace Sea
             if (_fog != null) return;
             _fog = new SeaFog();
             _fog.Build(_root);
+        }
+
+        // 以港为心揭一圈雾 —— 开局(FogStartR)与到港(FogDockR)各一次, 都是一次性事件。
+        //   当场 Flush 而不是等 Tick 的节流: 那是"抹开途中别卡"的节流(≤11 次/秒), 事件式的揭圈
+        //   要让玩家**这一帧**就看见雾散开, 否则到港后得干等 ~0.09s。
+        void RevealFogAtPort(Port p, float radius)
+        {
+            if (_fog == null || p == null) return;
+            _fog.RevealAt(p.Lon, p.Lat, radius);
+            _fog.Flush();
         }
 
         // 该港是否已探明(黑雾已掀开、能看见它)? 没建雾(理论不会)一律视为可见。
@@ -1449,6 +1556,48 @@ namespace Sea
         //   推理会错, 像素不会。
         public Vector3 QaFleetWorldPos() { return _ship != null ? _ship.position : Vector3.zero; }
 
+        // 把舰队填到 n 艘(每船再分点货), 只为让舰队面板的版面有像素证据。
+        //   为什么非得开这么个口子: 面板要证明的是"8~10 艘也摆得下、不压合计", 而 FleetTuning.fleetMaxShips
+        //   现在是 5 —— 走 BuyShip 那条真路径最多到 5 艘, 6~10 艘的版面**根本走不到**,
+        //   那样这版改动就只剩"我算过了"这种推理, 而这块的推理上一版就错过一次(perRow=2 固定,
+        //   三艘船即溢出 —— 算的时候没人把 6 行参数放进 133 高的卡里量一遍)。
+        //   这里只跳过"船队上限"这一道闸: 造船仍走 FleetBuilder.BuildShip, 装货仍走 FleetOps.AddCargo
+        //   —— 与买船/装货同一份数据、同一条代码, 只是不查上限、不扣钱。
+        public void QaFillFleetTo(int n, int cargoEach)
+        {
+            if (fleet == null || cat == null || cat.ShipOrder.Count == 0) return;
+            while (fleet.Ships.Count < n)
+            {
+                string id = cat.ShipOrder[fleet.Ships.Count % cat.ShipOrder.Count];
+                FleetBuilder.BuildShip(fleet, id, 0, flagship: false);
+            }
+            if (cargoEach > 0 && world != null && world.Goods != null)
+            {
+                int g = 0;
+                foreach (var good in world.Goods)
+                {
+                    if (g >= 4) break;            // 4 个货种: 正好逼出"货单折行"那种最长的参数块
+                    FleetOps.AddCargo(fleet, good.Id, cargoEach);
+                    g++;
+                }
+            }
+            RebuildFleetVisual();
+            PushLog("[闸门] 舰队填到 " + fleet.Ships.Count + " 艘(每船分货 " + cargoEach + " 件/种, 至多 4 种)");
+        }
+
+        // [闸门] 黑雾探明状况一行 —— "开局只亮出发点周围一小圈"这条, 要么拿数字说话, 要么就是嘴上说说。
+        //   为什么数**港**而不数格子: 格子数玩家看不见; 能去哪儿做买卖才是这一圈够不够大的判据。
+        //   期望(母港塞维利亚, FogStartR=12°): seville(0°) + lisbon(2.8°) + bordeaux(8.4°) 三个,
+        //   而 genoa(13.2°) 之外一个都不该亮 —— 那正是"再远就得自己驶过去"的证据。
+        public string QaFogState()
+        {
+            if (_fog == null || world == null || world.Ports == null) return "fog=null";
+            int n = 0; string names = "";
+            foreach (var p in world.Ports)
+                if (_fog.Revealed(p.Lon, p.Lat)) { n++; if (n <= 8) names += p.Name + " "; }
+            return "雾已探明港 " + n + "/" + world.Ports.Count + " [" + names.TrimEnd() + "]";
+        }
+
         public bool PointerOverUi() // SeaHud 设置
         {
             return UnityEngine.EventSystems.EventSystem.current != null
@@ -1463,6 +1612,14 @@ namespace Sea
             // 底下海图的输入(滚轮缩放 / 拖移 / 点选)全部暂停, 交还给最上层 UI;
             // 平时指针悬在任一 UI(按钮/面板/日志)上, 同样只让那层响应, 别让地图跟着滚轮缩放。
             bool overUi = PointerOverUi();
+            // [闸门] 左键按下这一瞬: 不管随后走哪条路(早退/收下/丢弃), 先把现场钉下来。
+            //   放在 AnyTopOpen 早退**之前** —— 否则闸门①(有浮层开着把这一下吃掉)恰恰记不到。
+            if (Input.GetMouseButtonDown(0))
+                QaClickNote(_hud != null && _hud.AnyTopOpen
+                        ? "左键按下 → 被闸门①吃掉(有浮层开着, 整张海图输入暂停)"
+                        : overUi ? "左键按下 → 被闸门②吃掉(指针压在 UI 上, 这一下从未开始)"
+                        : "左键按下 → 收下, 开始计时",
+                    Input.mousePosition);
             if (_hud != null && _hud.AnyTopOpen)
             {
                 _downHeld = false; _dragPan = false; _midHeld = false;
@@ -1501,7 +1658,7 @@ namespace Sea
             {
                 if (Input.GetMouseButton(0))
                 {
-                    if (!_dragPan && Vector2.Distance(Input.mousePosition, _downScreen) > 7f)
+                    if (!_dragPan && Vector2.Distance(Input.mousePosition, _downScreen) > ClickSlopPx())
                     {
                         _dragPan = true;              // 动够远才认作拖, 免得误吞点选
                         GrabAt(Input.mousePosition);  // 过闸瞬间咬住当前光标 → 起手不带"跳一下"
@@ -1512,8 +1669,17 @@ namespace Sea
                 {
                     bool wasPan = _dragPan;
                     _downHeld = false; _dragPan = false;
+                    // 闸门③④在**松手这一刻**才定: 按下时收下了, 未必走得到点选。
+                    //   PointerOverUi() 原来在这里还要再问一次, 现在问一次存下来两用(判定 + 记录),
+                    //   不多一次射线 —— 而"松手时指针挪到了 UI 上"正是玩家最容易踩、也最难自己意识到的一种。
+                    bool overUp = PointerOverUi();
+                    QaClickNote(wasPan ? "左键松手 → 被闸门④吃掉(按住期间动超阈值, 判成拖球)"
+                        : State == Mode.Sailing ? "左键松手 → 航行中不点选(要抛锚/靠港才能选目标)"
+                        : overUp ? "左键松手 → 被闸门③吃掉(松手时指针压在 UI 上了)"
+                        : "左键松手 → 走 PickAt(下面这一行必然有声)",
+                        Input.mousePosition);
                     // 停着(泊港/抛锚)点选: 港球=去那座城; 海面=插红旗自由探索
-                    if (!wasPan && State != Mode.Sailing && !PointerOverUi()) PickAt(Input.mousePosition);
+                    if (!wasPan && State != Mode.Sailing && !overUp) PickAt(Input.mousePosition);
                 }
             }
 
@@ -1580,6 +1746,120 @@ namespace Sea
             TryPlantSeaFlag(screen);
         }
 
+        // =============================================================
+        // [闸门] 「进游戏后第一次点目的地城市没反应」取证 —— 左键点击路径记录仪
+        //
+        //   症状是"点了什么也没发生"。而 PickAt 是**有去无回必有声**的: 命中港 → 设目标 + 航线;
+        //   落在海上 → 插红旗; 落在陆地/图幅外/球外 → 各有一句 Banner。所以"完全没有反应"
+        //   只有一个含义 —— 这一下**根本没走到 PickAt**, 被四道闸门之一吃了:
+        //     ① _hud.AnyTopOpen    : 有浮层开着(行情/舰队/确认…)→ 整张海图输入暂停, 按下就被丢
+        //     ② overUi(按下那一刻) : 指针压在 UI 上 → 连 _downHeld 都不置, 这一下从未开始
+        //     ③ overUi(松手那一刻) : 按下时在海图上、松手时压到了 UI → 已按下的这一下被丢
+        //     ④ wasPan             : 按住期间位移超过 ClickSlopPx → 判成"拖球", 不点选
+        //   要命的是这四道闸门看的全是**那一瞬**的状态(指针在哪儿、有没有浮层)。事后任何时刻
+        //   再去问, 状态早变了 —— 玩家手一松、指针一挪, 现场就没了。所以记录仪必须挂在
+        //   HandleCamAndPick 里, 和闸门同一行代码、同一帧问, 而不是挂在截图闸门里事后采样。
+        //
+        //   另有一个反向结论也靠它区分: 若日志里**一条"左键按下"都没有**, 说明点击连
+        //   HandleCamAndPick 都没进 —— 那问题就不在这四道闸门, 而在输入投递层(窗口焦点 / 鼠标没送到),
+        //   是另一条完全不同的线索。这两种情况非此即彼, 记一次就能分开。
+        //
+        //   开窗 = 启动时带 `-seaClickLog`(见 ArmClickLogFromArgs), 窗口 120 秒, 封顶 40 条。
+        //   **结论已出, 所以默认不开**: 取证结果是"四道闸门全清白、点击确实走到了 PickAt",
+        //   真因是主线程在算寻路栅格(见 SeaRoute.PumpBuild)。留着它是因为这套记录仪对
+        //   "点了没反应"这一类症状是通用的第一刀 —— 下次再犯, 加个开关就有现场, 不必重写。
+        //   但不能常态开: 它每次左键都要做一次射线 + 球面求交, 还要往日志里写十几行。
+        public static bool ClickLogRequested =>
+            System.Array.IndexOf(Environment.GetCommandLineArgs(), "-seaClickLog") >= 0;
+
+        public void ArmClickLogFromArgs()
+        {
+            if (ClickLogRequested) QaArmClickLog(120f);
+        }
+        // =============================================================
+        public void QaArmClickLog(float seconds)
+        {
+            _qaClickUntil = Time.realtimeSinceStartup + seconds;
+            _qaClickNotes = 0;
+            Debug.Log("[SEA] 点击路径记录仪: 开窗 " + seconds.ToString("F0")
+                + "s —— 现在请点一下海图上要去的城市(点一下就好, 然后停手看日志)。");
+        }
+        bool QaClickLogOn => _qaClickUntil > 0f && Time.realtimeSinceStartup <= _qaClickUntil;
+
+        // [闸门] 心跳: 每秒一行, 证明"Update 真在跑 / Unity 真看得见鼠标 / Unity 真认为自己在前台"。
+        //   为什么非有它不可: 没有它,"点击没反应"有两种完全不同的解释 ——
+        //     ① 点击到了, 被四道闸门之一吃了(改闸门);
+        //     ② 游戏根本没在接收输入(窗口失焦 → Unity 默认不跑 Update 不收鼠标; 改的是窗口焦点/输入层)。
+        //   这两者的修法南辕北辙, 而日志里"没有点击记录"这一条**同时符合两者** —— 心跳才能把②钉死。
+        //   顺带一提: `Application.isFocused` 为假时, Unity 默认连 Update 都不调 —— 那时日志会直接
+        //   **整段停住**(心跳也不再出现), 这本身就是"窗口没在前台"的铁证。
+        // [闸门] 卡顿看门狗: 任何一帧超过 80ms 就记一行(附这一帧在干什么)。
+        //   为什么非要有它: 上面那些计时只覆盖**我猜到的**地方(寻路/建线)。而"第一次点城会卡"
+        //   完全可能是别处 —— 最典型的是**首次渲染某个 shader 的变体编译**(那是渲染线程的活,
+        //   C# 侧一根计时器都量不到, 却在主线程上卡住整个游戏)。看门狗按帧计时, 不挑对象,
+        //   凡是卡住的帧它都会记, 于是"卡在哪儿"由数据说话, 而不是由我的猜测决定。
+        //   一格量的是"上一帧这个点到这一帧这个点"之间的墙钟时间, 也就是
+        //   【上一帧 Update 的后半 + 上一帧渲染 + 这一帧 Update 的前半】。所以下面既报帧号区间,
+        //   也报"寻路上次跑在第几帧" —— 帧号对得上就是寻路的账, 对不上就另有其人(渲染线程的嫌疑最大)。
+        float _qaLastFrameAt;
+        int _qaLastFrameNo;
+        int _qaSlowFrames;
+        void QaSlowFrameWatch()
+        {
+            float now = Time.realtimeSinceStartup;
+            int fr = Time.frameCount;
+            if (_qaLastFrameAt > 0f)
+            {
+                float ms = (now - _qaLastFrameAt) * 1000f;
+                if (ms >= 80f && _qaSlowFrames < 60)
+                {
+                    _qaSlowFrames++;
+                    Debug.Log("[SEA] 卡顿#" + _qaSlowFrames + " 帧" + _qaLastFrameNo + "→" + fr
+                        + " 历时 " + ms.ToString("F0") + "ms"
+                        + " | 状态=" + State + " 距地=" + _dist.ToString("F0")
+                        + " 有目标=" + (Dest != null ? Dest.Id : "-")
+                        + " | 栅格构建=" + SeaRoute.MsEnsure.ToString("F0") + "ms@帧" + SeaRoute.EnsureFrame
+                        + " A*=" + SeaRoute.MsAstar.ToString("F0") + "ms@帧" + SeaRoute.AstarFrame
+                        + " 展开" + SeaRoute.AstarExpanded + " 缓存=" + SeaRoute.CacheCount);
+                }
+            }
+            _qaLastFrameAt = now;
+            _qaLastFrameNo = fr;
+        }
+
+        float _qaBeatAt;
+        void QaBeat()
+        {
+            if (!QaClickLogOn || Time.realtimeSinceStartup < _qaBeatAt) return;
+            _qaBeatAt = Time.realtimeSinceStartup + 1f;
+            Debug.Log("[SEA] 心跳 t=" + Time.realtimeSinceStartup.ToString("F0")
+                + " 聚焦=" + Application.isFocused
+                + " 鼠标=" + ((Vector2)Input.mousePosition).ToString("F0")
+                + " 帧=" + Time.frameCount
+                + " 距地=" + _dist.ToString("F0"));
+        }
+
+        // 把"这一刻"的四道闸门 + 这一点的点选结果一次问全。
+        //   问 PortAtScreen 是**纯函数**调用, 不会改任何状态 —— 所以"记一笔"本身对玩法零影响。
+        void QaClickNote(string what, Vector2 pos)
+        {
+            if (!QaClickLogOn || _qaClickNotes >= 40) return;
+            _qaClickNotes++;
+            Vector3 g;
+            bool onGlobe = SphereAtScreen(pos, out g);
+            var p = PortAtScreen(pos);
+            Debug.Log("[SEA] 点击路径#" + _qaClickNotes + " " + what
+                + " | 指针=" + pos.ToString("F0")
+                + " 距地=" + _dist.ToString("F0")
+                + " 状态=" + State
+                + " | AnyTopOpen=" + (_hud != null && _hud.AnyTopOpen)
+                + " 指针在UI上=" + PointerOverUi()
+                + " 指针下=" + SeaHud.TopUiUnderPointer(pos)
+                + " | _downHeld=" + _downHeld + " _dragPan=" + _dragPan
+                + " | 这一点: 命中港=" + (p != null ? p.Name + "(" + p.Area.Name + ")" : "无")
+                + " 球面命中=" + onGlobe);
+        }
+
         // 屏幕点 → 命中哪座城(没落进任何圈就 null)。命中半径就是圈的绘制半径 MarkOf(p).RingR, 画多大点多大。
         //   球上有两条判据, 取先命中的那条:
         //   ① **弧长**: 光标在球面的落点与港心的大圆距离 ≤ RingR(度)。正对镜头时它与玩家看到的那圈严格同源
@@ -1619,7 +1899,12 @@ namespace Sea
                             float pxPerDeg = (Screen.height * 0.5f)
                                            / (Mathf.Tan(_cam.fieldOfView * 0.5f * Mathf.Deg2Rad) * depth);
                             float dpx = Vector2.Distance(new Vector2(sp.x, sp.y), screen);
-                            if (dpx <= ringR * pxPerDeg && pxPerDeg > 1f)
+                            // 屏幕空间**下限** PickFloorPx(): "画多大就点多大"在拉远时会退化到几个像素
+                            //   —— 78 处约 16px/°, 0.9° 的圈只有 14px 半径; 拉到 160 只剩 7px, 小港(RingMin
+                            //   0.28°)更是 4~5px, 那已经不是在点, 是在穿针。用户报的"要点2次"就是这个。
+                            //   加了下限后, 圈照旧可点(① 命中时 score 是"度" ≤ ringR, 永远压过这里的下限命中),
+                            //   而"圈外一指宽"也算点中它 —— 谁离光标近谁赢, 密港区挑最近的, 正合玩家本意。
+                            if (dpx <= Mathf.Max(ringR * pxPerDeg, PickFloorPx()) && pxPerDeg > 1f)
                                 score = dpx / pxPerDeg;      // 折回"度", 好和 ① 一起比谁更近
                         }
                     }
@@ -1628,6 +1913,109 @@ namespace Sea
                 if (score < bestD) { bestD = score; best = p; }
             }
             return best;
+        }
+
+        // =============================================================
+        // 点选手感两个数(都按屏幕高度换算, 不写死像素)
+        //   为什么不能写死: 这个项目从 1600×900 跑到了 2560×1440, 同一个"7px"在两种屏上是完全不同的
+        //   手感 —— 1440 上 7px 只有屏宽的 0.27%, 手一抖就过阈值。凡是有"像素"味道的阈值都该跟着
+        //   屏幕高度走, 这样换分辨率不用重新调。
+        // =============================================================
+        // 拖动阈值: 按下后位移超过它才算"拖海图", 没超过的松手 = 点选。
+        //   原来写死 7px —— 玩家看着城市点下去、手抖几个像素, 这一下就被当成拖动**静默吞掉**
+        //   (拖了 8px 球几乎没动, 也没有任何提示), 于是"得再点一次"。按屏高 1% 取, 1440 → 14px。
+        float ClickSlopPx() { return Mathf.Max(6f, Screen.height * 0.010f); }
+        // 可点半径下限(屏幕像素): 圈的像素半径小于它时按它算。见 PortAtScreen ② 的注释。
+        float _qaPickFloor = -1f;    // [闸门] ≥0 时强制用这个下限(0 = 复现旧行为), <0 = 用默认
+        float PickFloorPx()
+        {
+            return _qaPickFloor >= 0f ? _qaPickFloor : Mathf.Max(10f, Screen.height * 0.014f);   // 1440 → 20px
+        }
+
+        // [闸门] 「点城不太灵敏」的取证: 把"这座城此刻到底可点多大"量出来(像素)。
+        //   为什么量得准: PortAtScreen 是**纯函数**(屏幕点 → 城), 不必模拟鼠标 —— 从港心的屏幕位置
+        //   往右/往上一个像素一个像素地试, 试到不再命中它, 那个像素数就是它的可点半径。玩家感受到的
+        //   就是这两个数。
+        //   为什么同一个函数里报**两遍**(旧口径 0 下限 / 新口径): 两次用的是同一次取景、同一座城,
+        //   只换那一个下限数 —— 这才是"改前改后"的对照, 而不是拿今天量到的数与记忆里的数比。
+        public string QaPickProbe()
+        {
+            if (_cam == null || world == null) return "cam/world null";
+            Port pick = null; float bestd = float.MaxValue; Vector2 sp0 = Vector2.zero;
+            var c = new Vector2(Screen.width * 0.5f, Screen.height * 0.5f);
+            foreach (var p in world.Ports)
+            {
+                Vector3 pw = SeaGlobe.ToWorld(p.Lon, p.Lat);
+                if (Vector3.Dot(pw.normalized, _cam.transform.position - pw) <= 0f) continue;
+                Vector3 sp = _cam.WorldToScreenPoint(pw);
+                if (sp.z <= 0f) continue;
+                float d = Vector2.Distance(new Vector2(sp.x, sp.y), c);
+                if (d < bestd) { bestd = d; pick = p; sp0 = new Vector2(sp.x, sp.y); }
+            }
+            if (pick == null) return "屏幕里没有朝镜头的城";
+
+            float old = _qaPickFloor;
+            _qaPickFloor = 0f;                       // 旧口径: 画多大点多大
+            int oldR = SweepHit(pick, sp0);
+            _qaPickFloor = -1f;                      // 新口径: 带屏幕下限
+            int newR = SweepHit(pick, sp0);
+            _qaPickFloor = old;
+
+            float depth = (_cam.transform.position - SeaGlobe.ToWorld(pick.Lon, pick.Lat)).magnitude;
+            float pxPerDeg = (Screen.height * 0.5f)
+                / (Mathf.Tan(_cam.fieldOfView * 0.5f * Mathf.Deg2Rad) * depth);
+            return "距地=" + _dist.ToString("F0") + " 状态=" + State
+                + " | 离屏心最近的城 " + pick.Name + "(尺寸" + pick.Size + ")"
+                + " 圈半径=" + MarkOf(pick).RingR.ToString("F2") + "°"
+                + " 该处=" + pxPerDeg.ToString("F1") + "px/°"
+                + " | 可点半径: 旧 " + oldR + "px → 新 " + newR + "px"
+                + " | 拖动阈值 " + ClickSlopPx().ToString("F0") + "px(原 7)";
+        }
+
+        // [闸门] 逐城自检: "屏幕点在城心 → 选中该城" 对**每一座**朝镜头的城都成立吗?
+        //   为什么非要逐城问, 而不是只问离屏心最近的那一座(那是上面 QaPickProbe 干的):
+        //     玩家嘴里的"点城不灵"里的"城"是**他自己挑的那座**, 不是屏心那座 —— 只测屏心,
+        //     恰恰漏掉球缘(地表侧对镜头, 1 像素横跨好几度)和密港区(可点圈互相重叠)这些真正难点的位置。
+        //   这也是无头环境里唯一能测"点选"的办法: PortAtScreen 是**纯函数**(屏幕点 → 城), 不必有鼠标。
+        //     而"点击被浮层吃掉"那一类不归它管 —— 那要靠 QaClickNote 在真手上点的那一刻记, 两者互补。
+        //   三种失败各有各的病: 点不中 = 半径太小/被剔除; 选中别家 = 邻城把点抢走了(密港区)。
+        public string QaPortSelfPickAudit()
+        {
+            if (_cam == null || world == null) return "cam/world null";
+            int facing = 0, ok = 0, dead = 0, wrong = 0;
+            float minR = float.MaxValue; string minName = "-";
+            var sb = new System.Text.StringBuilder();
+            foreach (var p in world.Ports)
+            {
+                Vector3 pw = SeaGlobe.ToWorld(p.Lon, p.Lat);
+                if (Vector3.Dot(pw.normalized, _cam.transform.position - pw) <= 0f) continue;   // 背半球
+                Vector3 sp = _cam.WorldToScreenPoint(pw);
+                if (sp.z <= 0f) continue;
+                var v = new Vector2(sp.x, sp.y);
+                if (v.x < 0f || v.x >= Screen.width || v.y < 0f || v.y >= Screen.height) continue;   // 出画
+                facing++;
+                var got = PortAtScreen(v);
+                if (got == p) ok++;
+                else if (got == null) { dead++; if (sb.Length < 500) sb.Append(p.Name).Append("点不中 "); }
+                else { wrong++; if (sb.Length < 500) sb.Append(p.Name).Append("→").Append(got.Name).Append(' '); }
+                int r = SweepHit(p, v);   // 往右试到不再命中它: 玩家实际感受到的可点半径(像素)
+                if (r < minR) { minR = r; minName = p.Name; }
+            }
+            return "距地=" + _dist.ToString("F0") + " 画内且朝镜头的城 " + facing
+                + " | 点城心选中自己 " + ok + " / 点不中 " + dead + " / 选中别家 " + wrong
+                + " | 最窄可点半径 " + minR + "px(" + minName + ")"
+                + (sb.Length > 0 ? " | " + sb.ToString().TrimEnd() : "");
+        }
+
+        // 从港心的屏幕点往右一像素一像素试, 返回"最后还命中它"的那一格(横向半径)。
+        int SweepHit(Port p, Vector2 from)
+        {
+            int r = 0;
+            for (int i = 1; i <= 200; i++)
+            {
+                if (PortAtScreen(from + new Vector2(i, 0f)) == p) r = i; else break;
+            }
+            return r;
         }
 
         void SetPortTarget(Port p)
@@ -1937,6 +2325,7 @@ namespace Sea
                 _focus = SeaGlobe.ToWorld(arrive.Lon, arrive.Lat);
                 _dist = Mathf.Min(_dist, 26f);
                 PlaceShipAt(arrive, Time.time);
+                RevealFogAtPort(arrive, FogDockR);   // 到港揭一大圈(泊港不再逐帧揭, 见 Update)
                 long wage = FleetOps.SettleAtPort(fleet, arrive.Id);
                 PushLog("抵达 " + arrive.Name + "。进港结算工资 " + Money(wage) + ", 士气恢复, 伤号已治。");
                 // 红旗照记(不因开关关着就漏记; 开关随时可打开补显); 只有开着时才广播日志
@@ -2007,6 +2396,59 @@ namespace Sea
             return w;
         }
         public int FreeLoad() => TotalCapacity() - CargoWeight() - ProvWeight();
+
+        // ---- 给养分舱: 每艘船"名下"扛着多少载给养(纯展示口径) ----
+        //   模拟层里给养是**全队一本账**(fleet.Prov, 存读档也是全队一份), 没有"哪艘船扛"这回事。
+        //   可舰队页的船卡与右下角货仓速览都要按船报"仓位占了多少", 这份公账就得有个分摊口径。
+        //   取"按各船**剩余舱位**分摊", 三条理由:
+        //     · 收货时 CanPlace / FleetOps.AddCargo 本来就是按**剩余舱位**逐船塞的 —— 给养照同一条
+        //       规则走, "货往哪儿塞、给养就往哪儿塞", 玩家不必去理解第二套口径;
+        //     · 这是唯一能保证"每艘船报出来的占用都 ≤ 它自己的舱位上限"的口径。按舱位**上限**按比例
+        //       分摊的话, 一艘塞满货的船会报出 260 + 给养 > 260、"剩"成负数 —— 一眼假;
+        //     · 取整用最大余数法(先落整数下界, 余下那几载补给小数部分最大的船), Σ各船恒等于全队给养,
+        //       于是船卡上的数字加起来正好是「全队合计」那一行报的那个数。
+        //   代价(如实记下): 装卸货会改变各船的"剩余舱位", 于是各船名下那几载**会跟着挪** ——
+        //   那是"按空舱分摊"的本义, 不是抖动。真觉得晃眼, 改成按 EffCapacity(舱位上限)分摊即可, 一行的事。
+        //   全队一点空舱都没有(买货只查逐船舱位, 给养又先占了额度, 这个态是能走到的)时各船报 0:
+        //   照实报"塞不下", 而不是编一个负数出来。
+        public int[] ShipProvWeights()
+        {
+            var ships = fleet.Ships;
+            int n = ships != null ? ships.Count : 0;
+            var res = new int[n];
+            int total = ProvWeight();
+            if (n == 0 || total <= 0) return res;
+
+            var room = new int[n];
+            int roomSum = 0;
+            for (int i = 0; i < n; i++)
+            {
+                room[i] = Mathf.Max(0, ships[i].EffCapacity - ships[i].OccupiedWeight(fleet.WeightOf));
+                roomSum += room[i];
+            }
+            if (roomSum <= 0) return res;
+
+            int placed = 0;
+            var frac = new float[n];
+            for (int i = 0; i < n; i++)
+            {
+                float exact = (float)total * room[i] / roomSum;
+                int w = Mathf.Min(room[i], Mathf.FloorToInt(exact));
+                res[i] = w; placed += w; frac[i] = exact - w;
+            }
+            // 余数最多 n-1 载, 给"小数部分最大"的那几艘(比例上最该多得的先拿);
+            //   已经贴到自己舱位上限的船不再参与(它那小数为大是被 min 夹出来的, 不是真该多拿)。
+            int left = Mathf.Min(total - placed, roomSum - placed);
+            while (left > 0)
+            {
+                int best = -1;
+                for (int i = 0; i < n; i++)
+                    if (res[i] < room[i] && (best < 0 || frac[i] > frac[best])) best = i;
+                if (best < 0) break;
+                res[best]++; frac[best] = -1f; left--;
+            }
+            return res;
+        }
         public int GoodInHold(string goodId)
         {
             int n = 0;
@@ -2183,6 +2625,50 @@ namespace Sea
             fleet.Gold -= cost;
             foreach (var s in fleet.Ships) s.CrewAboard = s.Model.CrewMax;
             PushLog($"在港口码头招募水手 ×{missing}, 花 {Money(cost)}");
+        }
+
+        // ---- 半仓补员: 逐船看, 不足半仓的补到半仓, 已过半仓的**原样不动**(只补不裁) ----
+        //   "半仓"取 CrewMax 的一半; 再兜一个 CrewMin 下限 —— 现有 13 种船型都满足 半仓 ≥ 下限,
+        //   但下限是"这条船开不开得动"的硬线, 不该靠一张数据表顺手保证(将来加小船容易踩到)。
+        //   为什么要有这个操作: 招满水手是给远洋/接舷准备的, 近海跑一趟根本用不上那么多人,
+        //   而水手按人头吃给养、占仓位(见 ShipProvWeights), 满编跑短程纯亏。半仓是"够开"的档。
+        public static int CrewHalfOf(ShipModel m)
+        {
+            if (m == null) return 0;
+            return Mathf.Max(m.CrewMax / 2, m.CrewMin);
+        }
+
+        public long RecruitCostToHalf()
+        {
+            if (State != Mode.Docked) return -1L;
+            long cost = 0;
+            foreach (var s in fleet.Ships)
+            {
+                int need = CrewHalfOf(s.Model) - s.CrewAboard;
+                if (need > 0) cost += (long)(need * cat.Tuning.RecruitCostBase);
+            }
+            return cost;
+        }
+
+        public void RecruitCrewHalf()
+        {
+            if (State != Mode.Docked) return;
+            long cost = 0; int missing = 0;
+            foreach (var s in fleet.Ships)
+            {
+                int need = CrewHalfOf(s.Model) - s.CrewAboard;
+                if (need > 0) { missing += need; cost += (long)(need * cat.Tuning.RecruitCostBase); }
+            }
+            if (missing <= 0) { Banner = "各船水手都已过半仓, 无需补员"; return; }
+            if (cost > fleet.Gold) { Banner = "现金不足补员(" + Money(cost) + ")"; return; }
+            fleet.Gold -= cost;
+            // 逐船"不足才补": 满编的船这一趟一个子儿都没花在它身上, 也就不该被顺手裁回半仓。
+            foreach (var s in fleet.Ships)
+            {
+                int half = CrewHalfOf(s.Model);
+                if (s.CrewAboard < half) s.CrewAboard = half;
+            }
+            PushLog($"在港口码头招募水手 ×{missing}(补到半仓), 花 {Money(cost)}");
         }
 
         public void RestDays(int n)

@@ -33,8 +33,8 @@ namespace Sea
         // 雾壳抬升(沿球面法线): 下限是"必须盖住该被盖住的东西" —— 港球顶 ≈2.55、普通城旗顶 ≈1.8、
         //   大本营旗**杆**顶 4.25(baseY 0.35 + 杆高 2.6×1.5)。但最高的其实不是杆顶, 是那面旗布:
         //   它从杆顶往东伸出 3.0 并上扬, 临时诊断实测布心已在 5.0 上下、布顶约 5.5 —— **高过 4.8 的壳**。
-        //   为什么这样也行: 旗布只长在**已探明**的地方 —— 大本营(开局就揭)、到过的城(到港那一刻揭),
-        //   而读档后船就泊在那儿、第一帧 Update 便以 FogDockR 揭一大圈(见 LoadGame 的老档兜底)。
+        //   为什么这样也行: 旗布只长在**已探明**的地方 —— 大本营(开局就揭)、到过的城(到港那一刻揭,
+        //   见 SeaPlay.Arrive / RevealFogAtPort)。
         //   壳真正要盖的是"未探明区里的东西", 那些地方只有港球/港圈/红绿旗, 全在 1.8 以下。
         //   上限是"相机绝不能钻进壳里" —— 壳是敞口球面, 相机一旦进去, 近半球被裁掉, 黑雾会整片消失。
         //   于是这个数必须 < SeaPlay 滚轮下限(6.0)。可用区间 ~2.55 … 6.0 很宽, 取中偏上即可。
@@ -53,6 +53,7 @@ namespace Sea
         bool _dirty;
         float _lastUp;
         float _lcx = float.NegativeInfinity, _lcz = float.NegativeInfinity;   // 上次抹圈的圆心(经, 纬)
+        float _lcr;                       // 上次抹圈的半径(= 该圆心已抹开的范围)
         Texture2D _tex;
         Renderer _ren;
         bool _ready;
@@ -167,8 +168,12 @@ namespace Sea
         public void RevealAt(float lon, float lat, float radius)
         {
             if (!_ready) return;
-            if (Mathf.Abs(lon - _lcx) < MoveEps && Mathf.Abs(lat - _lcz) < MoveEps) return;
-            _lcx = lon; _lcz = lat;
+            // 攒圈判定必须**连半径一起看**, 不能只看圆心挪没挪:
+            //   每次靠港, 船就停在港上, 而进港前一瞬的航行条带(16°)已经以同一个点为中心抹过一次 ——
+            //   圆心差不到 1.2° 是常事, 于是"到港揭一大圈"会被整个跳过, 到港反而比航行时看得还少。
+            //   半径变大 = 有新地方要抹; 不变或更小 = 这一圈早被更大的圈包住了, 跳过是对的。
+            if (Mathf.Abs(lon - _lcx) < MoveEps && Mathf.Abs(lat - _lcz) < MoveEps && radius <= _lcr + 0.01f) return;
+            _lcx = lon; _lcz = lat; _lcr = radius;
 
             double phi0 = lat * Deg2Rad, rRad = radius * Deg2Rad;
             double c0 = Math.Cos(rRad), s0 = Math.Sin(phi0), cf0 = Math.Cos(phi0);

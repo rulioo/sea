@@ -362,9 +362,27 @@ namespace Sea
         public static bool LandAt(double lon, double lat, string onlyRing)
         {
             if (s_rings.Count == 0) BuildData();
+            if (onlyRing == null)
+            {
+                // 快路: 先用每环的经纬包围盒粗筛, 筛掉了就不必走射线法。
+                //   为什么这道筛子非加不可: 本函数被 SeaRoute.Ensure 拿来**逐格**判 44 万次,
+                //   而原来的写法是每一格都把**所有环的所有顶点**走一遍 —— 实测 5µs/格,
+                //   44 万格 = 2.2 秒, 整笔砸在玩家第一次点目的地的那一帧上(手柄日志实测 2217ms)。
+                //   而远洋格占七成以上, 它们离任何一块陆地的包围盒都差着十几个经度, 一次比较就否掉。
+                //   这不是近似: 点在环的包围盒之外 ⇒ 必在环外, 是"在环内"的必要条件。
+                //   边界点依旧会落到 PointInPoly, 判定结果逐点不变。
+                EnsureRingBoxes();
+                for (int r = 0; r < s_rings.Count; r++)
+                {
+                    if (lon < s_ringBox[r * 4] || lon > s_ringBox[r * 4 + 2] ||
+                        lat < s_ringBox[r * 4 + 1] || lat > s_ringBox[r * 4 + 3]) continue;
+                    if (PointInPoly(lon, lat, s_rings[r].pts)) return true;
+                }
+                return false;
+            }
             foreach (var ring in s_rings)
             {
-                if (onlyRing != null && ring.name != onlyRing) continue;
+                if (ring.name != onlyRing) continue;
                 if (PointInPoly(lon, lat, ring.pts)) return true;
             }
             return false;
@@ -393,7 +411,11 @@ namespace Sea
         //   线段求交: 判决式的, 不漏。SeaRoute 的抽直与航线校验器都以它为准。
         // =============================================================
 
-        static float[] s_ringBox;   // 每环 4 个数(minLon/minLat/maxLon/maxLat), 求交前粗筛用
+        // 每环 4 个数(minLon/minLat/maxLon/maxLat), 求交/内外判定前的粗筛。
+        //   必须是 double, 不能存 float: 存 float 会把端点四舍五入, 于是"盒子上界被抬高了
+        //   一个 ulp"时, 紧贴盒边的那条弦/那个点会被**误筛掉** —— 对 SegmentHitsLand 就是漏判
+        //   一次压陆, 对 LandAt 就是漏判一个陆地格。都是静默错, 且只在这类边界上偶发。
+        static double[] s_ringBox;
 
         // 线段是否压陆: 端点落在陆地**内部**, 或与海岸线发生真穿越。
         //   端点落在海岸线上本身不算 —— 港点和格心都可能正好压在岸线上, 而 LandAt 对边界点的
@@ -425,7 +447,7 @@ namespace Sea
         static void EnsureRingBoxes()
         {
             if (s_ringBox != null && s_ringBox.Length == s_rings.Count * 4) return;
-            s_ringBox = new float[s_rings.Count * 4];
+            s_ringBox = new double[s_rings.Count * 4];
             for (int r = 0; r < s_rings.Count; r++)
             {
                 var p = s_rings[r].pts;
@@ -438,8 +460,8 @@ namespace Sea
                     if (y < y0) y0 = y;
                     if (y > y1) y1 = y;
                 }
-                s_ringBox[r * 4] = (float)x0; s_ringBox[r * 4 + 1] = (float)y0;
-                s_ringBox[r * 4 + 2] = (float)x1; s_ringBox[r * 4 + 3] = (float)y1;
+                s_ringBox[r * 4] = x0; s_ringBox[r * 4 + 1] = y0;
+                s_ringBox[r * 4 + 2] = x1; s_ringBox[r * 4 + 3] = y1;
             }
         }
 

@@ -40,6 +40,7 @@ namespace Sea
         static readonly Dictionary<string, SeaRouteData> _cache = new Dictionary<string, SeaRouteData>();
 
         public static void ClearCache() { _cache.Clear(); }
+        public static int CacheCount => _cache.Count;   // [闸门] 诊断用: 看门狗每帧报一行
 
         // 诊断计数(只读, 不参与逻辑): 两种"直线兜底"各发生了几次。
         //   SeaMenu.ValidateRoutes 清零后跑一遍, 看看到底是吸附不到海格还是 A* 找不到路。
@@ -144,47 +145,114 @@ namespace Sea
             return sb.ToString();
         }
 
+        // [闸门] 计时: 把"第一次点目的地为什么会卡一下"拆成可读的毫秒数。
+        //   这张 0.25° 栅格是 1000×440 = 44 万格, 每格一次 LandAt; 而它**只在第一次问路时**才建
+        //   (懒加载) —— 于是那笔一次性开销正好落在玩家点下第一座城的那一帧上。
+        //   量出来才知道该"提前建"还是该"改算法", 别猜。
+        public static float MsEnsure, MsAstar;      // 最近一次各阶段耗时(毫秒)
+        public static int AstarExpanded;            // 最近一次 A* 展开了多少个节点
+        //   带上"这笔开销发生在第几帧": 看门狗只报"这一帧卡了 N ms", 光看毫秒数无法断定卡的是
+        //   寻路还是别的东西(比如首次渲染某 shader 变体)。帧号一对上, 因果就是死的, 不靠猜。
+        public static int EnsureFrame, AstarFrame;
+
+        // -------------------------------------------------------------
+        // 栅格构建: 从"玩家点下第一座城的那一帧"挪到"启动首页还开着的那几秒"
+        //
+        //   病灶(玩家实测 + 手柄日志): 44 万格 × LandAt 的懒加载正好压在第一次点目的地的帧上 ——
+        //   实测定格 2217ms, 紧接着 A* 又 355ms, 合计约 2.6 秒无响应。玩家的话是
+        //   "点了没有效果, 多等一下就出来了" —— 不是没收到点击, 是主线程在算。
+        //
+        //   两条修法并行, 缺一不可:
+        //     ① 算法: LandAt 先用环的包围盒粗筛(见 SeaMapGen.LandAt), 远洋格从"走遍所有环的顶点"
+        //        降到几次浮点比较。这是压常数。
+        //     ② 结构: 构建**分帧切片**, 且由 Awake 就踢起来 —— 首页开着的那几秒足够建完, 等玩家
+        //        真去点城时这笔账早已付清。算法再快也快不过"根本不在那一帧做"。
+        //   ②不依赖①: 将来地图画得更大更碎, 切片照样保证不冻帧。
+        // -------------------------------------------------------------
+        // 每帧最多花在构建上的毫秒数。5ms 是有意的取舍: 全建完 156ms(实测), 2ms/帧要 1.3 秒才付清,
+        //   而玩家手快的话在首页上按不了那么久 —— 剩下没建完的部分就会转嫁给「新开航程」那一下。
+        //   5ms/帧 把窗口压到半秒出头, 代价是首页那几帧从 16.7ms 变成 ~21ms —— 首页是静态画面,
+        //   这点开销看不出来, 而"玩家点进海图时账已付清"才是要保的东西。
+        public const float PumpSliceMs = 5f;
+        static int _buildPhase;      // 0=填 _sea  1=填 _coastal  2=建完
+        static int _buildRow;        // 本阶段已完成的行数
+        static float _buildMs;       // 构建累计耗时(跨所有切片)
+        static float _ensureBlockMs; // 其中有多少是"被问路逼着同步等"的
+
+        /// 在没人等着问路的时候先把栅格建起来(SeaPlay.Awake 踢一脚, Update 每帧推一把)。
+        ///   在首页还盖着海图时把账付掉, 是这一整套的目的。
+        public static void WarmUp() { if (!_built && _sea == null) AllocGrid(); }
+
+        static void AllocGrid()
+        {
+            _cols = (int)Math.Ceiling((SeaMapGen.Lon1 - SeaMapGen.Lon0) / Step);
+            _rows = (int)Math.Ceiling((SeaMapGen.Lat1 - SeaMapGen.Lat0) / Step);
+            _sea = new byte[_cols * _rows];
+            _coastal = new bool[_cols * _rows];
+            _buildPhase = 0; _buildRow = 0;
+        }
+
+        /// 推进构建。budgetMs = 本次最多花多少毫秒(float.MaxValue = 一口气建完)。true = 已可用。
+        ///   切片粒度是**一行**(1000 格), 每铺一行看一次表 —— 行很短, 所以不会一口气冲过预算太多。
+        public static bool PumpBuild(float budgetMs)
+        {
+            if (_built) return true;
+            if (_sea == null) AllocGrid();
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            while (_buildPhase < 2)
+            {
+                if (_buildRow >= _rows) { _buildPhase++; _buildRow = 0; continue; }
+                int y = _buildRow, row = y * _cols;
+                if (_buildPhase == 0)
+                {
+                    double lat = SeaMapGen.Lat0 + (y + 0.5) * Step;
+                    for (int x = 0; x < _cols; x++)
+                        _sea[row + x] = (byte)(SeaMapGen.LandAt(SeaMapGen.Lon0 + (x + 0.5) * Step, lat) ? 0 : 1);
+                }
+                else
+                {
+                    // 近岸标记: 3×3 邻域里有任一格的格心在陆上(或越界) → 本格算"近岸"。
+                    //   用途见 Astar: 只有近岸的弦才值得花精确求交的代价。
+                    //   为什么远洋格可以跳过: 陆尖要能把两个海格的连线切断, 它自己得先窄到不足一格,
+                    //   而本图的海岸是手绘的, 最小的岛(如四国 0.5°×0.6°)也远大于 0.25° 的格 ——
+                    //   这种瘦陆块周围一定有格心落陆的邻格, 于是必然被标成近岸。真正的漏网只可能是
+                    //   "比格还窄、且四周格心全在海上的陆条", 本图不存在这种形状。
+                    for (int x = 0; x < _cols; x++)
+                    {
+                        bool near = false;
+                        for (int dy = -1; dy <= 1 && !near; dy++)
+                            for (int dx = -1; dx <= 1; dx++)
+                            {
+                                int nx = x + dx, ny = y + dy;
+                                if (!InGrid(nx, ny) || _sea[Idx(nx, ny)] == 0) { near = true; break; }
+                            }
+                        _coastal[row + x] = near;
+                    }
+                }
+                _buildRow++;
+                if (budgetMs < float.MaxValue && sw.Elapsed.TotalMilliseconds >= budgetMs) break;
+            }
+            _buildMs += (float)sw.Elapsed.TotalMilliseconds;
+            if (_buildPhase >= 2)
+            {
+                _built = true;
+                MsEnsure = _buildMs;
+                EnsureFrame = Time.frameCount;
+                Debug.Log("[SEA] SeaRoute 栅格建好: 累计 " + _buildMs.ToString("F0") + "ms ("
+                    + _cols + "×" + _rows + " = " + (_cols * _rows) + " 格), 其中被问路逼着同步等 "
+                    + _ensureBlockMs.ToString("F0") + "ms");
+            }
+            return _built;
+        }
+
         static void Ensure()
         {
             if (_built) return;
-            _built = true;
-            _cols = (int)Math.Ceiling((SeaMapGen.Lon1 - SeaMapGen.Lon0) / Step);
-            _rows = (int)Math.Ceiling((SeaMapGen.Lat1 - SeaMapGen.Lat0) / Step);
-            int n = _cols * _rows;
-            _sea = new byte[n];
-            for (int y = 0; y < _rows; y++)
-            {
-                double lat = SeaMapGen.Lat0 + (y + 0.5) * Step;
-                int row = y * _cols;
-                for (int x = 0; x < _cols; x++)
-                {
-                    double lon = SeaMapGen.Lon0 + (x + 0.5) * Step;
-                    _sea[row + x] = (byte)(SeaMapGen.LandAt(lon, lat) ? 0 : 1);
-                }
-            }
-
-            // 近岸标记: 3×3 邻域里有任一格的格心在陆上(或越界) → 本格算"近岸"。
-            //   用途见 Astar: 只有近岸的弦才值得花精确求交的代价。
-            //   为什么远洋格可以跳过: 陆尖要能把两个海格的连线切断, 它自己得先窄到不足一格,
-            //   而本图的海岸是手绘的, 最小的岛(如四国 0.5°×0.6°)也远大于 0.25° 的格 ——
-            //   这种瘦陆块周围一定有格心落陆的邻格, 于是必然被标成近岸。真正的漏网只可能是
-            //   "比格还窄、且四周格心全在海上的陆条", 本图不存在这种形状。
-            _coastal = new bool[n];
-            for (int y = 0; y < _rows; y++)
-            {
-                int row = y * _cols;
-                for (int x = 0; x < _cols; x++)
-                {
-                    bool near = false;
-                    for (int dy = -1; dy <= 1 && !near; dy++)
-                        for (int dx = -1; dx <= 1; dx++)
-                        {
-                            int nx = x + dx, ny = y + dy;
-                            if (!InGrid(nx, ny) || _sea[Idx(nx, ny)] == 0) { near = true; break; }
-                        }
-                    _coastal[row + x] = near;
-                }
-            }
+            // 正常情况下走不到这里: 首页那几秒已经把栅格建完了(SeaPlay 每帧 PumpBuild)。
+            //   真走到了(比如读档后玩家手极快), 就一口气建完 —— 宁可卡一下, 也不能拿半张栅格去寻路。
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            PumpBuild(float.MaxValue);
+            _ensureBlockMs += (float)sw.Elapsed.TotalMilliseconds;
         }
 
         static int ColOf(double lon) => (int)Math.Floor((lon - SeaMapGen.Lon0) / Step);
@@ -330,6 +398,7 @@ namespace Sea
         // ---------- A*(8 邻, 对角不切角; 允许重复入堆的简单版) ----------
         static List<int> Astar(int start, int goal)
         {
+            var swA = System.Diagnostics.Stopwatch.StartNew();
             int n = _cols * _rows;
             var g = new float[n];
             var parent = new int[n];
@@ -361,9 +430,11 @@ namespace Sea
                     while (c != start) { rev.Add(c); c = parent[c]; }
                     rev.Add(start);
                     rev.Reverse();
+                    MsAstar = (float)swA.Elapsed.TotalMilliseconds;
+                    AstarExpanded = expand; AstarFrame = Time.frameCount;
                     return rev;
                 }
-                if (++expand > n * 4) return null;   // 保险闸, 防病态地图死循环
+                if (++expand > n * 4) { MsAstar = (float)swA.Elapsed.TotalMilliseconds; AstarExpanded = expand; AstarFrame = Time.frameCount; return null; }   // 保险闸, 防病态地图死循环
                 int x = cur % _cols, y = cur / _cols;
                 float gcur = g[cur];
                 for (int k = 0; k < 8; k++)
@@ -392,6 +463,8 @@ namespace Sea
                     }
                 }
             }
+            MsAstar = (float)swA.Elapsed.TotalMilliseconds;
+            AstarExpanded = expand; AstarFrame = Time.frameCount;
             return null;
         }
 

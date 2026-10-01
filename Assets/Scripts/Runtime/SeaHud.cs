@@ -34,6 +34,37 @@ namespace Sea
         static readonly Color ColLog = new Color(0.75f, 0.88f, 0.69f);   // 航行日志正文绿 = 基本信息卡"士气"健康值 #BFE0B0
         const float ShipPicAspect = 2f;   // 船图统一比例 宽:高 = 2:1(舰队卡/船坞行共用, 出图按此比例裁)
 
+        // ---- 舰队情况浮层的版面常数 ----
+        //   为什么卡高是**定死**的、而不是像早先那样"由容器高度除下来": 一张卡里那 4~6 行参数
+        //   一行都不能少、也一行都不能越出卡外 —— 越出去就压到下方的「全队合计」, 那正是这版要修的毛病。
+        //   (旧算法 perRow=2 固定, 三艘船就排成两行, rowH 被压到 133, 参数块却要 6 行 ≈ 93 ——
+        //    溢出的那几行正好落在合计带上。行高由容器反推 = 船一多就必然溢出。)
+        //   所以改成: 卡高按内容定死, 让**面板高度**跟着行数走。
+        const float FleetPanelW = 1252f;      // 与底栏动作条同宽(1252) —— 浮层与底栏左右齐边
+        const float FleetHeadH  = 36f;        // 头部(标题 + ✕)高度
+        const float FleetCardsBottom = 140f;  // 船卡区下缘 = 合计带上沿(合计带 90~140, 按钮 40~80)
+        const float FleetCardH  = 196f;       // 一张卡: 金框 2×2 + 留白 + 图带 56 + 名牌 22 + 参数块 ~98(够 5 行还余 ~12)
+        const float FleetPicH   = 56f;        // 图带高(2:1 → 宽 112); 参数块优先, 图是占位框, 让它让位
+        const int   FleetPerRowMax = 5;       // 每行至多 5 张 —— 10 艘正好两行, 再多也排得下
+        const float FleetCardWMax = 390f;     // 船少时别把一张卡拉成一条
+        const float FleetGapX = 12f, FleetGapY = 12f;
+        // 船卡的金框与内衬(用户定: 「每艘船的图片和信息放在一个金色方框区域中」)。
+        //   框由两层实心矩形叠出来 —— 底板涂金、内衬比它四边各缩 FleetCardEdge —— 不用描边精灵:
+        //   九宫格 PNG 要进仓库、还得随分辨率缩放, 缩不好就糊边; 两层矩形在任何尺寸下都是硬边,
+        //   颜色又与全项目调色板同源(金 = ColGoldBtn/ColTitle 一系)。
+        const float FleetCardEdge = 2f;    // 金框线宽(露出来的那一圈)
+        const float FleetCardPadX = 10f;   // 内容距金框内侧的左右留白
+        const float FleetCardPadT = 5f;    // 上留白
+        const float FleetCardPadB = 5f;    // 下留白
+        static readonly Vector2 FleetPanelPos = new Vector2(0f, 56f);   // 可用区(底栏顶 112 ~ 屏顶 720)正中 = 416, 即中心 +56
+
+        // 面板高度 = 船卡区下缘 + 船卡区(rows 行) + 头部
+        static float FleetPanelH(int rows)
+        {
+            if (rows < 1) rows = 1;
+            return FleetCardsBottom + rows * FleetCardH + (rows - 1) * FleetGapY + FleetHeadH;
+        }
+
         SeaPlay play;
         Camera _cam;
 
@@ -56,6 +87,7 @@ namespace Sea
         readonly List<Button[]> _buy = new List<Button[]>();    // 每行 [买1, 买10, 全买]
         readonly List<Button[]> _sell = new List<Button[]>();   // 每行 [卖1, 卖10, 全卖]
         readonly List<Text[]> _sellLbl = new List<Text[]>();    // 与 _sell 平行: 每键上的"卖1/卖10/全卖"字(无持仓时改暗淡, 别再亮白)
+        readonly List<Image[]> _sellImg = new List<Image[]>();  // 与 _sell 平行: 每键的**底色**(手里有这件货才转金黄 —— 黄=有东西可卖)
         // 行情行高亮: 每行一条透明感应带(悬停微亮 / 点选那行金亮, 避免误操作) —— 感应带排在按钮之下
         readonly List<Image> _rowBand = new List<Image>();
         readonly List<RectTransform> _rowRt = new List<RectTransform>();
@@ -114,7 +146,7 @@ namespace Sea
         readonly List<Text> _shipHeads = new List<Text>();   // 每卡一行名牌
         readonly List<Text> _shipStat = new List<Text>();    // 每卡该船参数块
         string _shipSig = "";
-        Button _fleetProv15, _fleetProv30, _fleetRecruit, _fleetDock, _fleetSail;
+        Button _fleetProv15, _fleetProv30, _fleetRecruit, _fleetRecruitHalf, _fleetDock, _fleetSail;
 
         // 花金操作确认弹窗
         GameObject _confirmGo;
@@ -127,14 +159,18 @@ namespace Sea
         bool _departOpen;
         Text _departBody;
 
-        // 航行日志(可滚动翻看 + 按日期分组)
-        ScrollRect _logScroll;
-        RectTransform _logTrack, _logThumb;
+        // 右侧两张卡(航行日志 / 舰队货仓)的可滚动装配 —— 同一份代码装两遍, 见 MakeScroller
+        Scroller _logSc, _holdSc;
         int _logVersion = -1;      // 已渲染的日志版本(只在日志真的变时重排文字)
         bool _logPinned = true;    // 视图贴在最"新"(底部); 玩家往上翻历史时不打断
 
+        // 行情表的滚动视窗(20 件货一屏放不下) —— 开铺时要把它卷回第一行
+        ScrollRect _tradeScroll;
+
         // 港名标签
         readonly Dictionary<string, Text> _labels = new Dictionary<string, Text>();
+
+        GameObject _logoGo;   // 左上题名(最后挂的, 永远在最上层) —— 舰队面板开着时让它让位, 见 Update 那段
 
         // 常驻 HUD 面板的矩形(地名标签禁区): 只要标签的屏幕框压到这些框, 就不显示该标签
         //   —— 保证按钮/日志/舰况/目标条等永不被地图地名盖住(地名垫在所有面板之下 + 此处再加道保险)
@@ -166,6 +202,8 @@ namespace Sea
         bool _built;
         string _lastPort = "__";      // 检测"新到一港" → 自动弹行情
         int _lastVoyage;              // 上一次看到的 SeaPlay.VoyageSerial(开局/读档 = 一次进港)
+        string _qaVoyageEdge = "(还没发生过进港边沿)";   // [闸门] 见 Update 进港分支
+        int _qaVoyageEdges;
         bool _goalCongrats;
         float _bannerAt = -99f; string _bannerText = "";
 
@@ -306,12 +344,14 @@ namespace Sea
                 img.raycastTarget = false;   // 名牌图不挡底下地图点选
                 RectAt(Rt(go), new Vector2(0, 1), new Vector2(0, 1), new Vector2(0, 1),
                     new Vector2(12, -10), new Vector2(w, h));
+                _logoGo = go;
                 return;
             }
 
             // 兜底: 还没导进 logo 图时, 先放一段文字题名占位
             var t = AddText(root, "大航海时代 2026", 11, ColTitle, TextAnchor.UpperLeft);
             t.fontStyle = FontStyle.Bold;
+            _logoGo = t.gameObject;
             var ol = t.gameObject.AddComponent<Outline>();
             ol.effectColor = new Color(0f, 0.02f, 0.05f, 0.85f);
             ol.effectDistance = new Vector2(0.7f, -0.7f);
@@ -324,9 +364,12 @@ namespace Sea
         // =============================================================
         void BuildFleet(Transform root)
         {
+            // 宽 = 底栏同宽; 高**随行数变** —— 每次船队变动由 EnsureFleetShipCards 重设(这里先按两行建)。
+            //   竖直位置钉在"底栏之上那块可用区"(底栏顶 112 ~ 屏顶 720, 中心 416)的正中:
+            //   于是面板长高长矮都是**上下对称**地长 —— 10 艘(560 高)也上不撞屏顶、下不压底栏。
             _fleetGo = Panel("fleet", root, ColPanel);
             RectAt(Rt(_fleetGo), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f),
-                new Vector2(0, -4), new Vector2(600, 456));
+                FleetPanelPos, new Vector2(FleetPanelW, FleetPanelH(2)));
             var head = AddText(_fleetGo.transform, "⚓ 舰队情况", 18, ColTitle, TextAnchor.MiddleCenter);
             RectAt(Rt(head.gameObject), new Vector2(0, 1), new Vector2(1, 1), new Vector2(0.5f, 1), new Vector2(0, -2), new Vector2(0, 26));
             var xb = MakeBtn(_fleetGo.transform, "close", "✕", 16, ColBtn, Color.white);
@@ -334,10 +377,11 @@ namespace Sea
             xb.onClick.AddListener(() => _fleetOpen = false);
 
             // 船卡区: 居中浮层主体 —— 每艘船一张卡 = 船图占位(上) + 该船参数(下)
+            //   下缘 = 合计带上沿, 上缘 = 头部下沿; 卡区高度正好由行数决定(见 FleetPanelH)。
             _shipRoot = Rt(NewRT("ships", _fleetGo.transform));
             var sr = _shipRoot;
             sr.anchorMin = new Vector2(0, 0); sr.anchorMax = new Vector2(1, 1);
-            sr.offsetMin = new Vector2(22, 140); sr.offsetMax = new Vector2(-22, -36);
+            sr.offsetMin = new Vector2(22, FleetCardsBottom); sr.offsetMax = new Vector2(-22, -FleetHeadH);
 
             // 全队合计(至多三行短句, 抬到按钮带(高40、顶缘y80)之上、船卡(底缘y140)之下;
             //  溢出不越过矩形下缘 → 文字绝不会再压到下方按钮)
@@ -345,19 +389,24 @@ namespace Sea
             var fs = Rt(_fleetSum.gameObject);
             fs.anchorMin = new Vector2(0, 0); fs.anchorMax = new Vector2(1, 0);
             fs.pivot = new Vector2(0.5f, 0);
-            fs.offsetMin = new Vector2(26, 90); fs.offsetMax = new Vector2(-26, 140);
+            fs.offsetMin = new Vector2(26, FleetCardsBottom - 50f); fs.offsetMax = new Vector2(-26, FleetCardsBottom);
             _fleetSum.horizontalOverflow = HorizontalWrapMode.Wrap;
             _fleetSum.verticalOverflow = VerticalWrapMode.Truncate;
 
             _fleetProv15 = MakeBtn(_fleetGo.transform, "prov15", "补给 15 日", 15, ColBtn, Color.white);
             _fleetProv30 = MakeBtn(_fleetGo.transform, "prov30", "补给 30 日", 15, ColBtn, Color.white);
             _fleetRecruit = MakeBtn(_fleetGo.transform, "crew", "招满水手", 15, ColGoldBtn, new Color(0.14f, 0.08f, 0.03f));
-            PlaceFleetBtn(_fleetProv15, -156f, 142f);
-            PlaceFleetBtn(_fleetProv30, -6f, 142f);
-            PlaceFleetBtn(_fleetRecruit, 152f, 150f);
+            // 半仓补员: 招满的"减配版" —— 同一族操作放右手边, 但用回普通色, 一眼分得清主次。
+            _fleetRecruitHalf = MakeBtn(_fleetGo.transform, "crewHalf", "半仓水手", 15, ColBtn, Color.white);
+            // 一行四键居中: 键宽 138、缝 12 → 整排 588, 左缘 -294, 键心间距 150。
+            PlaceFleetBtn(_fleetProv15, -225f, 138f);
+            PlaceFleetBtn(_fleetProv30, -75f, 138f);
+            PlaceFleetBtn(_fleetRecruit, 75f, 138f);
+            PlaceFleetBtn(_fleetRecruitHalf, 225f, 138f);
             _fleetProv15.onClick.AddListener(() => ConfirmProvision(15));
             _fleetProv30.onClick.AddListener(() => ConfirmProvision(30));
             _fleetRecruit.onClick.AddListener(ConfirmRecruit);
+            _fleetRecruitHalf.onClick.AddListener(ConfirmRecruitHalf);
 
             _fleetGo.SetActive(false);
         }
@@ -376,23 +425,34 @@ namespace Sea
             foreach (Transform ch in _shipRoot) Destroy(ch.gameObject);
             _shipHeads.Clear(); _shipStat.Clear();
             int n = ships.Count;
+
+            // 行列: 每行至多 5 列 → 行数 = ceil(n/5); 列数再把 n **平摊到各行**上
+            //   (6 艘 = 3+3, 不是"5+1 孤零零一张")。列数由 ceil(n/rows) 反推, 恒有 cols*rows ≥ n。
+            int rows = 1, cols = 1;
+            if (n > 0)
+            {
+                rows = (n + FleetPerRowMax - 1) / FleetPerRowMax;
+                cols = (n + rows - 1) / rows;
+            }
+            // 面板高度跟着行数走 —— 卡区永远正好装下这些行, 不多也不少(多出来的高度全在卡区里,
+            //   绝不会挤到下面的合计带/按钮带上去)。
+            var fr = Rt(_fleetGo);
+            float wantH = FleetPanelH(rows);
+            if (fr != null && !Mathf.Approximately(fr.sizeDelta.y, wantH))
+                fr.sizeDelta = new Vector2(FleetPanelW, wantH);
             if (n == 0) return;
 
-            Rect rr = _shipRoot.rect;
-            float W = Mathf.Max(60f, rr.width);
-            int perRow = 2;
-            int rows = (n + perRow - 1) / perRow;
-            float gapX = 10f, gapY = 14f;
-            float colW = (W - gapX * (perRow - 1)) / perRow;
-            float availH = Mathf.Max(60f, rr.height);
-            float rowH = Mathf.Max(60f, Mathf.Min(320f, (availH - gapY * (rows - 1)) / rows));
+            float W = Mathf.Max(60f, _shipRoot.rect.width);
+            float colW = Mathf.Min(FleetCardWMax, (W - FleetGapX * (cols - 1)) / cols);
 
             for (int i = 0; i < n; i++)
             {
-                int c = i % perRow, rw = i / perRow;
-                float x = c * (colW + gapX);
-                float y = rw * (rowH + gapY);
-                BuildShipCard(ships[i], x, y, colW, rowH);
+                int rw = i / cols, c = i % cols;
+                int cnt = Mathf.Min(cols, n - rw * cols);                 // 这一行实际摆几张
+                float rowW = cnt * colW + (cnt - 1) * FleetGapX;
+                float x = (W - rowW) * 0.5f + c * (colW + FleetGapX);      // 不满的行居中, 不靠左
+                float y = rw * (FleetCardH + FleetGapY);
+                BuildShipCard(ships[i], x, y, colW, FleetCardH);
             }
         }
 
@@ -435,12 +495,27 @@ namespace Sea
             col.anchoredPosition = new Vector2(x, -y);
             col.sizeDelta = new Vector2(colW, rowH);
 
-            // 船图占位: 一律 2:1(与船坞同源), 高按卡内顶带预算、宽据此缩放, 水平居中 —— 未来把中央换成该船真图
-            float bandH = Mathf.Max(64f, rowH * 0.40f);
-            float picW = Mathf.Min(colW, bandH * ShipPicAspect);
-            float picH = Mathf.Max(40f, picW / ShipPicAspect);
+            // 金框 + 内衬(用户定: 每艘船的图片和信息都装在一个金色方框里)。
+            //   先建底板、再建内衬 —— GUI 按层级顺序画, 所以先建的在下、后建的在上, 内容再压在两者之上。
+            //   内衬故意偏不透明(0.95): 浮层本身 0.90 半透, 底下海图会淡淡透出来, 卡里再透就显脏。
+            var plate = Panel("card", col, ColGoldBtn);
+            Fill(Rt(plate), 0, 0, 0, 0);
+            var face = Panel("face", plate.transform, new Color(0.085f, 0.115f, 0.16f, 0.95f));
+            Fill(Rt(face), FleetCardEdge, FleetCardEdge, FleetCardEdge, FleetCardEdge);
+
+            // 内容一律从金框内侧再让进留白; 卡窄到装不下图时以宽为准(再等比缩)。
+            float inW = Mathf.Max(40f, colW - 2f * (FleetCardEdge + FleetCardPadX));
+            float padT = FleetCardEdge + FleetCardPadT;
+            float mgn = -2f * (FleetCardEdge + FleetCardPadX);   // 名牌/参数块的宽度增量(两侧各让一次)
+
+            // 船图占位: 一律 2:1(与船坞同源), 高 60(宽据此 = 120), 水平居中 —— 未来把中央换成该船真图。
+            //   为什么图带只有 60: 参数块优先, 卡里的硬约束是"那几行一行都不能少";
+            //   图是占位框, 缩它代价最小。
+            float picH = Mathf.Min(FleetPicH, rowH * 0.34f);
+            float picW = picH * ShipPicAspect;
+            if (picW > inW) { picW = inW; picH = picW / ShipPicAspect; }
             var pic = Panel("pic", col, new Color(0.34f, 0.44f, 0.54f, 1f));
-            RectAt(Rt(pic), new Vector2(0.5f, 1), new Vector2(0.5f, 1), new Vector2(0.5f, 1), new Vector2(0, 0), new Vector2(picW, picH));
+            RectAt(Rt(pic), new Vector2(0.5f, 1), new Vector2(0.5f, 1), new Vector2(0.5f, 1), new Vector2(0, -padT), new Vector2(picW, picH));
             var mat = Panel("mat", pic.transform, new Color(0.045f, 0.075f, 0.115f, 1f));
             Fill(Rt(mat), 2, 2, 2, 2);
             // 真图精灵(盖深色底上, 等比例); 占位文字在其上, 无图才显
@@ -452,18 +527,25 @@ namespace Sea
             Fill(Rt(ph.gameObject), 6, 6, 4, 4);
             SetShipArt(art, ph, s.Model.Id, "—— 船 图 占 位 ——\n(此框将换上该船真图)");
 
-            // 名牌(旗舰金 / 僚舰浅蓝), 紧贴图下
+            // 名牌(旗舰金 / 僚舰浅蓝), 紧贴图下。名牌也 Truncate: 万一船名长到折行,
+            //   折出来的第二行否则会画进下面参数块的地界里(AddText 默认是 Overflow)。
             var head = AddText(col, "", 15, s.IsFlagship ? ColGold : new Color(0.80f, 0.93f, 1f), TextAnchor.MiddleCenter);
-            RectAt(Rt(head.gameObject), new Vector2(0, 1), new Vector2(1, 1), new Vector2(0.5f, 1),
-                new Vector2(0, -(picH + 3)), new Vector2(0, 22));
+            RectAt(Rt(head.gameObject), new Vector2(0, 1), new Vector2(1, 1), new Vector2(0.5f, 1f),
+                new Vector2(0, -(padT + picH + 3)), new Vector2(mgn, 22));
+            head.verticalOverflow = VerticalWrapMode.Truncate;
             _shipHeads.Add(head);
 
-            // 该船参数块
+            // 该船参数块: 高度 = 卡高 - 上面那些 - 金框与下留白, 够装 5 行(水手/货仓/仓位 + 货单一到两行)。
+            //   5 行是实测出来的上限(见 dev/fleet_grid_audit.ps1 的行带一节: 每行 ~16.5 canvas):
+            //   货单最多 4 种 + 省略号, 卡一窄就会折成两行 —— 那是最坏情况, 不是 4 行。
+            //   末行的 **Truncate** 是保险丝: 万一以后正文再加一行, 被切掉的是这一行的尾巴,
+            //   而不是像旧版那样整块**溢出卡外**压到「全队合计」上。
+            float stTop = padT + picH + 3 + 22 + 3;
             var st = AddText(col, "", 13, ColTxt, TextAnchor.UpperLeft);
             RectAt(Rt(st.gameObject), new Vector2(0, 1), new Vector2(1, 1), new Vector2(0.5f, 1),
-                new Vector2(0, -(picH + 29)), new Vector2(0, Mathf.Max(40f, rowH - picH - 33)));
+                new Vector2(0, -stTop), new Vector2(mgn, Mathf.Max(40f, rowH - stTop - (FleetCardEdge + FleetCardPadB))));
             st.horizontalOverflow = HorizontalWrapMode.Wrap;
-            st.verticalOverflow = VerticalWrapMode.Overflow;
+            st.verticalOverflow = VerticalWrapMode.Truncate;
             _shipStat.Add(st);
         }
 
@@ -478,20 +560,28 @@ namespace Sea
             if (play.fleet == null) return;
             EnsureFleetShipCards();
             var w = play.world;
+            var prov = play.ShipProvWeights();   // 每艘船名下的给养载重(全队给养按空舱分摊, 见 SeaPlay)
             int n = Mathf.Min(play.fleet.Ships.Count, _shipStat.Count);
             for (int i = 0; i < n; i++)
             {
                 var s = play.fleet.Ships[i];
                 _shipHeads[i].text = (s.IsFlagship ? "★ 旗舰" : "僚舰") + " · " + s.Model.Name;
-                var sb = new StringBuilder(128);
-                int occ = ShipWeight(s);
-                sb.Append("<b>水手</b> ").Append(s.CrewAboard).Append(" / ").Append(s.Model.CrewMax).Append('\n');
+                var sb = new StringBuilder(160);
+                int cargoW = ShipWeight(s);
+                int provW = i < prov.Length ? prov[i] : 0;
+                int occ = cargoW + provW;        // 仓位 = 货 + 给养: 给养同样吃舱位(用户点名要看得见)
+                sb.Append("<b>水手</b> ").Append(s.CrewAboard).Append('/').Append(s.Model.CrewMax).Append('\n');
                 int kinds = s.Cargo.Count, units = 0;
                 foreach (var kv in s.Cargo) units += kv.Value;
-                sb.Append("<b>货仓</b> 槽位 ").Append(kinds).Append('/').Append(s.Model.Slots)
-                  .Append(" · 共 ").Append(units).Append(" 件\n");
-                sb.Append("<b>仓位</b> ").Append(occ).Append(" / ").Append(s.EffCapacity)
-                  .Append(" 载 · 剩 ").Append(Math.Max(0, s.EffCapacity - occ));
+                sb.Append("<b>货仓</b> ").Append(kinds).Append('/').Append(s.Model.Slots).Append(" 种\n");
+                sb.Append("<b>仓位</b> ").Append(occ).Append('/').Append(s.EffCapacity)
+                  .Append(" 载 · 剩 ").Append(Math.Max(0, s.EffCapacity - occ)).Append('\n');
+                // 把上面那个"仓位"拆开给玩家看: 哪几载是货、哪几载是给养。
+                //   为什么单起一行而不是接在"仓位"后面: 卡最窄时内宽只有 208(5 列时),
+                //   "仓位 148/232 载 · 剩 84 · 货 120 + 给养 28" 那一串会折成两行 —— 一样占两行,
+                //   还读不清。拆成两行反而每行都短, 且"120 + 28 = 148"上下对着能自己验算。
+                sb.Append("<color=#8FA8C2>其中 货 ").Append(cargoW).Append(" (").Append(units)
+                  .Append("件) + 给养 ").Append(provW).Append("</color>");
                 if (kinds == 0)
                 {
                     sb.Append("\n<color=#8FA8C2>(空舱待装)</color>");
@@ -598,7 +688,7 @@ namespace Sea
                   .Append(Money(p.Cost)).Append(" 金</size>\n");
             sb.Append("\n<color=#FFD76A>本次购入共占约 <b>").Append(wt.ToString("0.#")).Append("</b> 载 · 花费 ")
               .Append(Money(cost)).Append("</color>\n<color=#8FA8C2>买完即吃即占仓位; 现存给养照常续用。</color>");
-            AskConfirm(sb.ToString(), () => play.ProvisionTo(nDays));
+            AskConfirm(sb.ToString(), () => play.ProvisionTo(nDays), BackTo.Fleet);
         }
 
         void ConfirmRecruit()
@@ -608,7 +698,21 @@ namespace Sea
             if (cost < 0) { play.Banner = "招募水手得靠港 —— 现在在海上(航行或抛锚)不行, 先驶回一座城。"; return; }
             if (cost == 0) { play.Banner = "水手已经满编, 无需招募。"; return; }
             AskConfirm("<b><color=#FFD76A>招募水手补齐</color></b>\n在码头把全舰队水手招满(旗舰 + 僚舰)。\n预计花费: <color=#FFD76A>" + Money(cost) + "</color> 金。",
-                () => play.RecruitCrewFull());
+                () => play.RecruitCrewFull(), BackTo.Fleet);
+        }
+
+        // 半仓补员: 逐船补到半仓。**只补不裁** —— 已过半仓的船原样不动(玩家满编跑过远洋、
+        //   现在想省给养, 可以自己按"裁"的那套来, 这个键不该替他把人赶下船, 那是不可逆的)。
+        void ConfirmRecruitHalf()
+        {
+            if (play.State != SeaPlay.Mode.Docked) { play.Banner = "招募水手得靠港 —— 现在在海上(航行或抛锚)不行, 先驶回一座城。"; return; }
+            long cost = play.RecruitCostToHalf();
+            if (cost < 0) { play.Banner = "招募水手得靠港 —— 现在在海上(航行或抛锚)不行, 先驶回一座城。"; return; }
+            if (cost == 0) { play.Banner = "各船水手都已过半仓, 无需补员。"; return; }
+            AskConfirm("<b><color=#FFD76A>招募水手到半仓</color></b>\n逐船看: <color=#7FE0FF>不足半仓的补到半仓</color>, 已过半仓的<color=#8FA8C2>原样不动(不裁人)</color>。\n"
+                + "半仓 = 该船满编的一半(且不低于该船最低配员); 近海短程够开, 又比满编省给养、省仓位。\n"
+                + "预计花费: <color=#FFD76A>" + Money(cost) + "</color> 金。",
+                () => play.RecruitCrewHalf(), BackTo.Fleet);
         }
 
         // 休整 10 日: 同"花金确认"流程 —— 先把"这会花掉什么/错过什么"讲清楚, 玩家点头才拨时间
@@ -623,11 +727,20 @@ namespace Sea
                 () => play.RestDays(10));
         }
 
-        void AskConfirm(string msg, System.Action ok)
+        // 确认弹窗是**从哪一层**弹出来的 —— 确认/取消之后要回到那一层去。
+        //   用户报的病例: 舰队页里点「补给 15 日」→ 确定 → 行情/舰队/船坞全收了, 人停在光秃秃的
+        //   海图上; 想看补给后的仓位得自己再点一次「⚓ 舰队」。可这道确认本就是舰队页的**子对话**,
+        //   关掉子对话回父页才是常理 —— 不回去等于"点一下按钮就把脚下的地板抽了"。
+        //   (休整 10 日是从底栏点的, 底栏一直在, 所以它仍旧 BackTo.None。)
+        enum BackTo { None, Fleet }
+        BackTo _confirmBack;
+
+        void AskConfirm(string msg, System.Action ok, BackTo back = BackTo.None)
         {
             FoldFloats();   // 确认弹窗也是"窗": 先把行情/舰队/船坞/情报/出航检查收掉, 干净地只叠一层
             _confirmMsg.text = msg;
             _confirmAction = ok;
+            _confirmBack = back;
             _confirmGo.SetActive(true);
         }
         void OnConfirmOk()
@@ -636,11 +749,20 @@ namespace Sea
             _confirmGo.SetActive(false);
             _confirmAction = null;
             if (a != null) a();
+            ApplyConfirmBack();
         }
         void OnConfirmCancel()
         {
             _confirmGo.SetActive(false);
             _confirmAction = null;
+            ApplyConfirmBack();
+        }
+        // 回到"弹这道确认的那一层"。放在动作**之后**跑: 动作里若又弹了别的层(目前没有),
+        //   也不该被这里盖掉 —— 谁最后说话谁算。
+        void ApplyConfirmBack()
+        {
+            var b = _confirmBack; _confirmBack = BackTo.None;
+            if (b == BackTo.Fleet) _fleetOpen = true;
         }
 
         // =============================================================
@@ -735,6 +857,157 @@ namespace Sea
         // =============================================================
         // 航行日志: 滚动视窗 + 滑块 + 日期分组(可回翻看"某天做了哪些事")
         // =============================================================
+        // -------------------------------------------------------------
+        // 右侧卡片(航行日志 / 舰队货仓)共用的"可滚动"装配
+        // -------------------------------------------------------------
+        sealed class Scroller
+        {
+            public ScrollRect Scroll;
+            public RectTransform Viewport, Content, Track, Thumb;
+        }
+
+        // 把一张右缘卡片变成"滚轮可翻、拖拽可翻、带滚动条"的面板。
+        //   card  —— 外卡(ScrollRect 挂在它身上, 见下)
+        //   id    —— 子物体命名前缀
+        //   pad   —— 视窗相对卡片的四边内缩 (左, 下, 右, 上); 右边要留出滚动条的位置
+        //
+        // ScrollRect 挂**外卡**而不是视窗 —— 这是本方法唯一值得解释的一句。
+        //   滚轮事件由 EventSystem 从"指针压住的那个 raycast 目标"往上找第一个 IScrollHandler。
+        //   原来挂在视窗上时, 指针只要落在视窗之外、卡片之内(标题条 "航行日志" 那 28px、
+        //   四周那几像素边距、滚动条左侧的空隙), 就一路找到 Canvas 也没人接 —— 那一圈白滚。
+        //   玩家看到的现象正是"这日志滚不动"(其实只是大半张卡滚不动)。
+        //   挂卡片 = 整张卡哪儿都能滚; 裁剪照旧由视窗的 Mask 负责(viewport 仍然指向它)。
+        Scroller MakeScroller(RectTransform card, string id, Vector4 pad)
+        {
+            var sc = new Scroller();
+
+            var vpGo = Panel(id + "_vp", card, new Color(0, 0, 0, 0.22f));   // 内深遮罩
+            var vp = Rt(vpGo);
+            vp.anchorMin = Vector2.zero; vp.anchorMax = Vector2.one;
+            vp.offsetMin = new Vector2(pad.x, pad.y);
+            vp.offsetMax = new Vector2(-pad.z, -pad.w);
+            vpGo.AddComponent<Mask>().showMaskGraphic = false;
+
+            var contentGo = NewRT(id + "_content", vpGo.transform);
+            var content = Rt(contentGo);
+            content.anchorMin = new Vector2(0, 1); content.anchorMax = new Vector2(1, 1);
+            content.pivot = new Vector2(0.5f, 1);
+            content.anchoredPosition = Vector2.zero;
+            content.sizeDelta = new Vector2(0, 40);
+
+            var scroll = card.gameObject.AddComponent<ScrollRect>();
+            scroll.horizontal = false; scroll.vertical = true;
+            scroll.movementType = ScrollRect.MovementType.Clamped;
+            scroll.scrollSensitivity = 28f;
+            scroll.viewport = vp;
+            scroll.content = content;
+
+            // 滚动条: 轨道 + 滑块(拖滑块翻页; 滚轮悬在这张卡上任意处都能翻)
+            sc.Track = Rt(Panel(id + "_bar", card, new Color(0f, 0f, 0f, 0.5f)));
+            sc.Track.anchorMin = new Vector2(1, 0); sc.Track.anchorMax = new Vector2(1, 1);
+            sc.Track.offsetMin = new Vector2(-17, 32); sc.Track.offsetMax = new Vector2(-7, -32);
+            sc.Thumb = Rt(Panel(id + "_knob", sc.Track, new Color(0.62f, 0.74f, 0.86f, 0.95f)));
+            var th = sc.Thumb.gameObject.AddComponent<SeaScrollThumb>();
+            th.scroll = scroll; th.track = sc.Track; th.thumb = sc.Thumb;
+            sc.Thumb.gameObject.SetActive(false);
+
+            sc.Scroll = scroll; sc.Viewport = vp; sc.Content = content;
+            return sc;
+        }
+
+        // 按当前位置摆滑块; 内容不够高(没得滚)就把整条滚动条藏掉
+        void UpdateThumb(Scroller sc)
+        {
+            if (sc == null || sc.Scroll == null || sc.Thumb == null || sc.Track == null) return;
+            float vpH = sc.Scroll.viewport.rect.height;
+            float cH = sc.Scroll.content.rect.height;
+            if (cH <= vpH + 1f) { sc.Thumb.gameObject.SetActive(false); return; }
+            sc.Thumb.gameObject.SetActive(true);
+
+            float trackH = sc.Track.rect.height;
+            float frac = Mathf.Clamp(vpH / cH, 0.06f, 1f);
+            float thumbH = Mathf.Max(18f, frac * trackH);   // 18 = 还能抓住的最小高度
+            float v = Mathf.Clamp01(sc.Scroll.verticalNormalizedPosition);
+            var rt = sc.Thumb;
+            // 底边锚定 + 位移, 不要写成"上下各给一个锚点"。
+            //   锚点写法 (anchorMin.y=v, anchorMax.y=v+frac) 在 v=1 时两个锚点重合 →
+            //   高度算成 0, 滑块整个凭空消失; 而"卷到顶"恰恰是货仓卡每次开铺的默认位置
+            //   (见 Update 里那条开铺回顶), 于是那张卡的滑块永远看不见。
+            //   位移写法在 v=0 / v=1 两头都成立。
+            rt.anchorMin = new Vector2(0f, 0f); rt.anchorMax = new Vector2(1f, 0f);
+            rt.pivot = new Vector2(0.5f, 0f);
+            rt.sizeDelta = new Vector2(-4f, thumbH);        // 横向 = 轨道宽 - 4(左右各留 2)
+            rt.anchoredPosition = new Vector2(0f, v * (trackH - thumbH));
+        }
+
+        // [闸门] 右侧两张卡(日志 / 货仓)的可滚动状态 —— 内容多高、视窗多高、滑块露没露、停在哪。
+        //   截图里轨道只有十来个像素宽, 滑块有没有"肉眼判"不稳(上一版就是因为判错了才漏掉
+        //   "卷到顶时滑块高度算成 0"这个 bug); 这行数字是它的纸面证据。
+        public string QaScrollState()
+        {
+            return "日志[" + CardScrollText(_logSc) + "] 货仓[" + CardScrollText(_holdSc) + "]";
+        }
+
+        static string CardScrollText(Scroller sc)
+        {
+            if (sc == null || sc.Scroll == null) return "未建";
+            float vpH = sc.Scroll.viewport != null ? sc.Scroll.viewport.rect.height : -1f;
+            float cH = sc.Scroll.content != null ? sc.Scroll.content.rect.height : -1f;
+            bool thumb = sc.Thumb != null && sc.Thumb.gameObject.activeSelf;
+            return "内容" + cH.ToString("F0") + "/视窗" + vpH.ToString("F0")
+                + (cH > vpH + 1f ? " 可滚" : " 不用滚")
+                + " 滑块" + (thumb ? "露·高" + sc.Thumb.rect.height.ToString("F0") : "藏")
+                + " 位" + sc.Scroll.verticalNormalizedPosition.ToString("F2");
+        }
+
+        // [闸门] 航行日志的滚动: 灌满 → 往上翻 → 看它**待不待得住**。
+        //   这张卡每帧都有一条"玩家没往回翻就把视图钉到最新"的规则(见 RefreshLog), 所以这里
+        //   最该证伪的坏法不是"滚不动", 而是"刚翻上去、下一帧又被钉回底部" —— 同帧里设一次再读
+        //   一次是看不出这个的, 只有分帧读两次位置才戳得穿。
+        //   为什么非要灌 40 条: 日常跑图那点日志量只有 235/视窗 252, 压根不溢出 —— 不灌就测不到。
+        int _qaLogStage = -1;
+        float _qaLogStageAt;
+
+        public void QaLogScrollTick()
+        {
+            if (_logSc == null || _logSc.Scroll == null) return;
+            // 头一次调用只起表(与 QaMarketScrollTick 同理: 否则第 0 步会和起表同帧发生, 白等一轮)
+            if (_qaLogStage < 0) { _qaLogStage = 0; _qaLogStageAt = Time.unscaledTime; return; }
+            if (_qaLogStage > 4) return;
+            if (Time.unscaledTime - _qaLogStageAt < 0.10f) return;
+            _qaLogStageAt = Time.unscaledTime;
+            var scroll = _logSc.Scroll;
+            switch (_qaLogStage)
+            {
+                case 0:
+                    for (int i = 0; i < 40; i++)
+                        play.PushLog("闸门灌日志 " + (i + 1) + "/40 —— 只为把这张卡撑到溢出");
+                    // 这里**故意不报** CardScrollText: content 高度要等 RefreshLog 重排完文字才长出来,
+                    //   同帧读到的是灌之前那 235 —— 会印出一句自相矛盾的"灌完 40 条…不用滚"。下一步再报。
+                    break;
+                case 1:
+                    Debug.Log("[SEA] 日志滚动: 灌完 40 条后 " + CardScrollText(_logSc)
+                        + " · 默认位 " + scroll.verticalNormalizedPosition.ToString("F3")
+                        + " (该是 0.000 = 贴最新那条)");
+                    break;
+                case 2:
+                    scroll.verticalNormalizedPosition = 1f;       // 玩家往上翻历史
+                    break;
+                case 3:
+                    Debug.Log("[SEA] 日志滚动: 翻到顶之后 pos=" + scroll.verticalNormalizedPosition.ToString("F3")
+                        + (scroll.verticalNormalizedPosition > 0.99f
+                            ? "  <== 待住了(没被每帧钉回底部)" : "  <== 被钉回去了!"));
+                    scroll.verticalNormalizedPosition = 0.5f;     // 停中段, 好让截图拍下"确实翻上去了"
+                    break;
+                default:
+                    Debug.Log("[SEA] 日志滚动: 中段停稳 pos=" + scroll.verticalNormalizedPosition.ToString("F3")
+                        + " " + CardScrollText(_logSc));
+                    _qaLogStage = 9;
+                    return;
+            }
+            _qaLogStage++;
+        }
+
         void BuildLog(Transform root)
         {
             var card = Panel("card_log", root, ColPanel);
@@ -742,45 +1015,22 @@ namespace Sea
             _logRt = Rt(card);   // 地名标签 keep-out: 右侧日志永不被地名压住
             AddHead(card.transform, "航行日志");
 
-            // 滚动视窗
-            var vpGo = Panel("vp", card.transform, new Color(0, 0, 0, 0.22f));
-            var vp = Rt(vpGo);
-            vp.anchorMin = new Vector2(0, 0); vp.anchorMax = new Vector2(1, 1);
-            vp.offsetMin = new Vector2(6, 6); vp.offsetMax = new Vector2(-20, -28);
-            vpGo.AddComponent<Mask>().showMaskGraphic = false;
-            _logScroll = vpGo.AddComponent<ScrollRect>();
-            _logScroll.horizontal = false; _logScroll.vertical = true;
-            _logScroll.movementType = ScrollRect.MovementType.Clamped;
-            _logScroll.scrollSensitivity = 28f;
+            _logSc = MakeScroller(Rt(card), "log", new Vector4(6f, 6f, 20f, 28f));
 
-            var contentGo = NewRT("content", vpGo.transform);
-            var content = Rt(contentGo);
-            content.anchorMin = new Vector2(0, 1); content.anchorMax = new Vector2(1, 1);
-            content.pivot = new Vector2(0.5f, 1);
-            content.anchoredPosition = Vector2.zero;
-            content.sizeDelta = new Vector2(0, 40);
-            _logScroll.viewport = vp;
-            _logScroll.content = content;
-
-            _logText = AddText(contentGo.transform, "", 12, ColLog, TextAnchor.UpperLeft);
+            // 字号 12 → 11: 右侧这两张卡是"查阅用"的, 一屏多塞几行比字大更要紧
+            //   (配合滚轮翻看, 见 MakeScroller)。
+            _logText = AddText(_logSc.Content, "", 11, ColLog, TextAnchor.UpperLeft);
             var lt = Rt(_logText.gameObject);
             lt.anchorMin = Vector2.zero; lt.anchorMax = Vector2.one;
             lt.offsetMin = new Vector2(2, 2); lt.offsetMax = new Vector2(-2, -2);
             _logText.horizontalOverflow = HorizontalWrapMode.Wrap;
             _logText.verticalOverflow = VerticalWrapMode.Overflow;
-
-            // 滚动条: 轨道 + 滑块(拖滑块翻历史; 滚轮悬在日志上也可翻)
-            _logTrack = Rt(Panel("bar", card.transform, new Color(0f, 0f, 0f, 0.5f)));
-            _logTrack.anchorMin = new Vector2(1, 0); _logTrack.anchorMax = new Vector2(1, 1);
-            _logTrack.offsetMin = new Vector2(-17, 32); _logTrack.offsetMax = new Vector2(-7, -32);
-            _logThumb = Rt(Panel("knob", _logTrack, new Color(0.62f, 0.74f, 0.86f, 0.95f)));
-            _logThumb.gameObject.AddComponent<SeaLogThumb>().hud = this;
-            _logThumb.gameObject.SetActive(false);
         }
 
         void RefreshLog()
         {
-            if (_logScroll == null) return;
+            if (_logSc == null || _logSc.Scroll == null) return;
+            var scroll = _logSc.Scroll;
             int n = play.Log.Count;
             if (n == 0)
             {
@@ -788,9 +1038,9 @@ namespace Sea
                 {
                     _logVersion = 0;
                     _logText.text = "……还没有航行日志。\n出海后这里会记下每天的动作,\n可滚动、按日期翻看。";
-                    _logScroll.content.sizeDelta = new Vector2(0, _logText.preferredHeight + 8f);
+                    _logSc.Content.sizeDelta = new Vector2(0, _logText.preferredHeight + 8f);
                 }
-                UpdateLogThumb();
+                UpdateThumb(_logSc);
                 return;
             }
             if (play.LogVersion != _logVersion)
@@ -806,50 +1056,22 @@ namespace Sea
                     {
                         if (i != n - 1) sb.Append('\n');   // 两组日期之间空一行
                         prevDay = d;
-                        sb.Append("<size=11><color=#FFD76A>—— ").Append(DateOf(d)).Append(" ——</color></size>\n");
+                        sb.Append("<size=10><color=#FFD76A>—— ").Append(DateOf(d)).Append(" ——</color></size>\n");
                     }
                     sb.Append(play.Log[i]).Append('\n');
                 }
                 _logText.text = sb.ToString();
                 float ph = _logText.preferredHeight + 6f;
-                _logScroll.content.sizeDelta = new Vector2(0, Mathf.Max(40f, ph));
-                if (keepBottom) _logScroll.verticalNormalizedPosition = 0f;   // 贴到最新
+                _logSc.Content.sizeDelta = new Vector2(0, Mathf.Max(40f, ph));
+                if (keepBottom) scroll.verticalNormalizedPosition = 0f;   // 贴到最新
             }
-            _logPinned = _logScroll.verticalNormalizedPosition <= 0.02f;
+            // _logPinned 每帧从**当前位置**重算, 所以拖滑块(SeaScrollThumb)不用自己回报 ——
+            //   那一帧翻到哪, 下一帧这里就读到哪。
+            _logPinned = scroll.verticalNormalizedPosition <= 0.02f;
             // 只要玩家没刻意往回翻, 每帧都把视图钉在最"新"(底部) —— 新记录一到就自动显示最新一条
-            if (_logPinned && _logScroll.verticalNormalizedPosition > 0f)
-                _logScroll.verticalNormalizedPosition = 0f;
-            UpdateLogThumb();
-        }
-
-        void UpdateLogThumb()
-        {
-            if (_logScroll == null || _logThumb == null || _logTrack == null) return;
-            float vpH = _logScroll.viewport.rect.height;
-            float cH = _logScroll.content.rect.height;
-            if (cH <= vpH + 1f) { _logThumb.gameObject.SetActive(false); return; }
-            _logThumb.gameObject.SetActive(true);
-            float frac = Mathf.Clamp(vpH / cH, 0.06f, 1f);
-            float v = Mathf.Clamp01(_logScroll.verticalNormalizedPosition);
-            var rt = Rt(_logThumb.gameObject);
-            rt.anchorMin = new Vector2(0f, v); rt.anchorMax = new Vector2(1f, Mathf.Min(1f, v + frac));
-            rt.offsetMin = new Vector2(2f, 0f); rt.offsetMax = new Vector2(-2f, 0f);
-            rt.anchoredPosition = Vector2.zero; rt.pivot = new Vector2(0.5f, 0.5f);
-        }
-
-        public void OnLogThumbDrag(PointerEventData e)
-        {
-            if (_logScroll == null || _logTrack == null || _logThumb == null) return;
-            Vector2 local;
-            RectTransformUtility.ScreenPointToLocalPointInRectangle(_logTrack, e.position, null, out local);
-            float H = _logTrack.rect.height;
-            float th = Rt(_logThumb.gameObject).rect.height;
-            if (H - th <= 1f) return;
-            float lo = -H * 0.5f + th * 0.5f, hi = H * 0.5f - th * 0.5f;
-            float yc = Mathf.Clamp(local.y, lo, hi);
-            float v = (yc - lo) / (H - th);
-            _logScroll.verticalNormalizedPosition = v;
-            _logPinned = v <= 0.02f;
+            if (_logPinned && scroll.verticalNormalizedPosition > 0f)
+                scroll.verticalNormalizedPosition = 0f;
+            UpdateThumb(_logSc);
         }
 
         static string DateOf(int d)
@@ -997,7 +1219,11 @@ namespace Sea
         void FoldFloats(bool alsoConfirm = false)
         {
             _tradeOpen = false; _fleetOpen = false; _yardOpen = false; _newsOpen = false; _departOpen = false;
-            if (alsoConfirm && _confirmGo != null) { _confirmGo.SetActive(false); _confirmAction = null; }
+            if (alsoConfirm && _confirmGo != null)
+            {
+                _confirmGo.SetActive(false); _confirmAction = null;
+                _confirmBack = BackTo.None;   // 对话框被强行收掉(不是玩家点的确定/取消) → 别留着"回哪一层"的念头
+            }
         }
 
         void ToggleMarket()
@@ -1005,6 +1231,77 @@ namespace Sea
             if (_tradeOpen) { FoldFloats(true); return; }   // 再点一下收铺
             FoldFloats(true);
             _tradeOpen = true;
+        }
+
+        // =============================================================
+        // [闸门] 「行情每次打开都回到数据第一行」的取证 —— 玩家报的是"关掉再打开, 它还停在
+        //   上次翻到的地方"。这里走玩家那条路(_tradeOpen 翻掉; 面板的 SetActive 与闭→开那条
+        //   边沿都在 Update 里, 一处不绕), 只把"翻到底"这一步替玩家做了。
+        //
+        //   为什么非要**分帧**: 边沿判定看的是"上一帧开着没有"。同一帧里关掉再打开 = 压根没有
+        //   边沿, 测出来必然"没回顶" —— 那是假失败, 会把一个对的实现判成错的。所以每步之间留
+        //   0.10s(≈6 帧), 让 Update 真跑过几轮; 五步合计 0.5s, 在那一格(0.8s)里跑完, 快门按下
+        //   时铺已经开在顶上 —— 图与日志说的才是同一时刻的事。
+        //   为什么中间(s2)还要报一次"翻过之后停在底部": 反证 RefreshTrade 没有每帧把表钉回顶。
+        //   真钉了的话玩家压根滚不动这张 20 行的表(船坞那份短表才敢每帧钉, 见 RefreshYard) ——
+        //   那是这一头的坏法, 与"不回顶"正好相反, 两头的证据都得留。
+        // =============================================================
+        // 按快门前探一次(与那张图同一时刻): 图里看到的那几行, 与这行 pos 得对得上。
+        public string QaMarketScrollState()
+        {
+            if (_tradeScroll == null) return "scroll=null";
+            return "pos=" + _tradeScroll.verticalNormalizedPosition.ToString("F3")
+                + " 表开着=" + (_tradeGo != null && _tradeGo.activeSelf)
+                + " 标题=" + (_tradeTitle != null ? _tradeTitle.text : "?");
+        }
+
+        int _qaScrollStage = -1;      // -1 没跑; 0..4 走到第几步; >4 跑完
+        float _qaScrollStageAt;
+        public void QaMarketScrollTick()
+        {
+            if (_tradeScroll == null) return;
+            // 头一次调用只是**起表**(把计时起点定下来), 不做事 —— 否则第一步会与起表同帧发生,
+            //   那 0.10s 的节流就从"起表那一刻"开始算了。
+            if (_qaScrollStage < 0) { _qaScrollStage = 0; _qaScrollStageAt = Time.unscaledTime; return; }
+            if (_qaScrollStage > 4) return;
+            if (Time.unscaledTime - _qaScrollStageAt < 0.10f) return;
+            _qaScrollStageAt = Time.unscaledTime;
+            switch (_qaScrollStage)
+            {
+                case 0:
+                    QaClosePanels();    // 让开舰队页(上一张图开着, 不收掉它盖在行情上头)
+                    QaOpenMarket();
+                    break;
+                case 1:
+                    _tradeScroll.verticalNormalizedPosition = 0f;   // 替玩家"翻到最下面"
+                    break;
+                case 2:
+                    Debug.Log("[SEA] 行情滚动: 翻到底之后 pos="
+                        + _tradeScroll.verticalNormalizedPosition.ToString("F3") + " (该还是 0.000)");
+                    QaClosePanels();    // 收铺
+                    break;
+                case 3:
+                    QaOpenMarket();     // 重新开铺 —— 该自己回到第一行
+                    break;
+                default:
+                    float p = _tradeScroll.verticalNormalizedPosition;
+                    Debug.Log("[SEA] 行情滚动: 收铺重开后 pos=" + p.ToString("F3")
+                        + (p > 0.999f ? "  <== 回了数据第一行" : "  <== 没回顶!"));
+                    _qaScrollStage = 9; // 测完, 别再走一遍
+                    return;
+            }
+            _qaScrollStage++;
+        }
+
+        // 把行情表卷回**数据第一行**(表头在滚动区之外, 本来就一直看得见, 不用管它)。
+        //   为什么是"开铺那一下"而不是每帧: RefreshTrade 每帧都跑, 在里面摆平 = 每帧钉回顶,
+        //   玩家压根滚不动这张 20 行的表(船坞那份清单是短表, 才敢那么干, 见 RefreshYard)。
+        //   为什么用 normalizedPosition: ScrollRect 的 setter 自己会 EnsureLayoutHasRebuilt
+        //   (必要时 ForceUpdateCanvases), 所以面板刚 SetActive(true) 的同一帧里设也算数 ——
+        //   开铺那一帧正是调用点。y=1 是顶端(content 的 pivot 在上, anchoredPosition 0 = 顶)。
+        void ScrollMarketTop()
+        {
+            if (_tradeScroll != null) _tradeScroll.verticalNormalizedPosition = 1f;
         }
 
         void ToggleIntel()
@@ -1357,7 +1654,9 @@ namespace Sea
             RectAt(Rt(hb), new Vector2(0, 1), new Vector2(1, 1), new Vector2(0.5f, 1), new Vector2(2, -36), new Vector2(-4, 26));
             for (int c = 0; c < cn.Length; c++)
                 HeaderCell(parent, cn[c], cx[c] + InsetX, cw[c], ca[c], 13, c == 4 ? ColGold : ColDim);   // 持有 列头金黄
-            // 买 / 卖三键组(数据列最右止于 516, 留 ~14 空隙再接按钮); 金黄=买入, 青=卖出(与键色对换后一致)
+            // 买 / 卖三键组(数据列最右止于 516, 留 ~14 空隙再接按钮)。
+            //   键色不再按"买/卖"分工: **青 = 常态**(与底栏动作键同色), **金黄 = 这一行手里有货可卖**
+            //   —— 黄在这里是"能动手"的状态色, 由 RefreshTrade 逐行刷(见那里的 canSell 分支)。
             const float BuyX = 530f, SellX = 706f;
             HeaderCell(parent, "买 入", BuyX + InsetX, 170f, TextAnchor.MiddleCenter, 13, ColTitle);
             HeaderCell(parent, "卖 出", SellX + InsetX, 170f, TextAnchor.MiddleCenter, 13, new Color(0.70f, 0.92f, 1f));
@@ -1381,6 +1680,7 @@ namespace Sea
             content.sizeDelta = new Vector2(0, play.world.Goods.Count * RowPitch + 4);
             scroll.viewport = vp;
             scroll.content = content;
+            _tradeScroll = scroll;   // 开铺时卷回第一行用(见 ScrollMarketTop; Update 里那条闭→开的边沿)
             _marketVp = vp;   // 行悬停判定: 指针是否落在这块滚动视窗里(滚到哪行就亮哪行)
 
             // 行数 = 货总数, 一次建足; **每行装哪件货**由 SortMarketRows 决定, 这里只管把行摆好。
@@ -1419,7 +1719,7 @@ namespace Sea
                 {
                     int qty = b == 0 ? 1 : (b == 1 ? 10 : int.MaxValue);
                     var btn = MakeBtn(row, "b" + i + "_" + b, b == 0 ? "买1" : (b == 1 ? "买10" : "全买"),
-                        13, ColGoldBtn, new Color(0.15f, 0.09f, 0.04f), clickSfx: false);
+                        13, ColBtn, Color.white, clickSfx: false);   // 青底白字 = 与底栏动作键同色
                     PlaceRowButton(btn, BuyX + b * 58f);
                     // **点下去那一刻**才去 _rowGoods 里取货, 而不是建行时把货捕获进来:
                     //   行号是稳定的, 行里装谁是可变的 —— 捕获旧货的话, 换港重排之后
@@ -1435,11 +1735,12 @@ namespace Sea
                 // 卖 1 / 卖 10 / 全清
                 var sells = new Button[3];
                 var sellLbls = new Text[3];
+                var sellImgs = new Image[3];
                 for (int s = 0; s < 3; s++)
                 {
                     int qty = s == 0 ? 1 : (s == 1 ? 10 : int.MaxValue);
                     var btn = MakeBtn(row, "s" + i + "_" + s, s == 0 ? "卖1" : (s == 1 ? "卖10" : "全卖"),
-                        13, ColBtn, Color.white, clickSfx: false);
+                        13, ColBtn, Color.white, clickSfx: false);   // 建时一律青底; "有货转金黄"由 RefreshTrade 逐行上色
                     PlaceRowButton(btn, SellX + s * 58f);
                     var q = qty; int si = i;
                     btn.onClick.AddListener(() =>
@@ -1449,8 +1750,9 @@ namespace Sea
                     });
                     sells[s] = btn;
                     sellLbls[s] = btn.GetComponentInChildren<Text>();   // 留住字色引用: 无持仓时整键转暗淡
+                    sellImgs[s] = btn.image;                            // 留住底色引用: 有持仓时整键转金黄
                 }
-                _buy.Add(buys); _sell.Add(sells); _sellLbl.Add(sellLbls);
+                _buy.Add(buys); _sell.Add(sells); _sellLbl.Add(sellLbls); _sellImg.Add(sellImgs);
             }
             SortMarketRows();   // 建完先排一次; 之后每次**进港**再排(见 Update 的换港分支)
         }
@@ -1491,16 +1793,157 @@ namespace Sea
             _departOpen = false; _yardOpen = false;
         }
 
+        // [闸门] 「进游戏/读档后头一下点城点不中」的取证。
+        //   要回答的只有一个问题: 玩家第一下点城的那一瞬, 海图输入是不是被某个浮层整个锁着?
+        //   链路是 HandleCamAndPick 开头那句 `if (_hud.AnyTopOpen) 早退` —— 只要有一层浮层开着,
+        //   点城/拖球/滚轮全都收不到, 而且**一点反馈都没有**, 玩家只会觉得"点了没反应"。
+        //   所以这里把六层浮层的在场情况、AnyTopOpen、以及"进港边沿到底把谁弹开了"(见 Update 的
+        //   进港分支, 那份是钉住的, 不受截图闸门每帧收浮层的影响)一次报全。
+        public string QaFirstClickProbe()
+        {
+            var sb = new System.Text.StringBuilder();
+            sb.Append("AnyTopOpen=").Append(AnyTopOpen)
+              .Append(" 行情=").Append(On(_tradeGo, _tradeOpen))
+              .Append(" 舰队=").Append(On(_fleetGo, _fleetOpen))
+              .Append(" 船坞=").Append(On(_yardGo, _yardOpen))
+              .Append(" 情报=").Append(On(_newsGo, _newsOpen))
+              .Append(" 出航检查=").Append(On(_departGo, _departOpen))
+              .Append(" 确认=").Append(On(_confirmGo, false))
+              .Append(" 设置=").Append(play != null && play.SettingsOpen)
+              .Append(" | 玩家状态=").Append(play != null ? play.State.ToString() : "?")
+              .Append(" 指针=").Append(((Vector2)Input.mousePosition).ToString("F0"))
+              .Append(" 指针在UI上=")
+              .Append(UnityEngine.EventSystems.EventSystem.current != null
+                      && UnityEngine.EventSystems.EventSystem.current.IsPointerOverGameObject())
+              .Append(" 指针下最上层=").Append(TopUiUnderPointer(Input.mousePosition))
+              .Append(" | 边沿: ").Append(_qaVoyageEdge);
+            return sb.ToString();
+        }
+
+        // 指针底下压着的那块 UI 是谁 —— "指针在UI上=true" 只说明"有东西", 不说"是什么"。
+        //   而这两件事要分开看: 压在日志/货仓卡上是正常的(那两张卡本来就该点得到),
+        //   压在某个**全屏透明底板**上才是病(那会让海图永远点不中, 且看不见摸不着)。
+        // 传点而不是内部取 Input.mousePosition: SeaPlay 的点击记录仪要问的是"那一刻**那一点**",
+        //   而它记的那一点就是当时的光标位置 —— 传参才能保证两边问的是同一点。
+        public static string TopUiUnderPointer(Vector2 pos)
+        {
+            var es = UnityEngine.EventSystems.EventSystem.current;
+            if (es == null) return "无EventSystem";
+            var ped = new PointerEventData(es) { position = pos };
+            var hits = new System.Collections.Generic.List<RaycastResult>();
+            es.RaycastAll(ped, hits);
+            if (hits.Count == 0) return "无(在海图上)";
+            var g = hits[0].gameObject;
+            return g.name + " @ " + (g.transform.parent != null ? g.transform.parent.name : "-")
+                + " 共" + hits.Count + "层";
+        }
+
+        // 浮层"开着没有"要报两个数: 组件 activeSelf(渲染/挡点击的真实依据) + 那个 bool 意图。
+        //   两个不一致本身就是病(比如 _tradeOpen=true 但 _tradeGo 没激活), 分开报才看得见。
+        static string On(GameObject go, bool want)
+        {
+            if (go == null) return "无组件";
+            return (go.activeSelf ? "开" : "关") + (go.activeSelf == want ? "" : "(意图" + (want ? "开" : "关") + "!)");
+        }
+
         // 把行情表叫回眼前。
         public void QaOpenMarket()
         {
             _tradeOpen = true;
         }
 
+        // 把舰队情况面板叫回眼前(截图闸门量"8~10 艘也摆得下"用)。
+        //   走的仍是 Update 里那条真路径(_fleetOpen=true → SetActive + RefreshFleet),
+        //   不另开一条"直接摆卡"的近道 —— 否则量到的就不是玩家看到的那个版面。
+        public void QaOpenFleet()
+        {
+            _tradeOpen = false;
+            _fleetOpen = true;
+        }
+
+        // [闸门] 走一遍"舰队页 → 点补给/招募 → 点确定"的真按钮链路, 把每一步的状态报成一行字。
+        //   用户报的病例: 点完确定, 舰队页没了。所以这里**点的是真按钮的 onClick**(不是直接调
+        //   play.ProvisionTo): 抄近道就正好绕开"确认弹窗 → 回调 → 回到哪一层"这段真正会出错的地方,
+        //   那这段闸门就等于没测。which = prov15 / prov30 / crew / crewHalf / all(四个依次走一遍)。
+        //   注意打开面板只设 _fleetOpen: 面板的 SetActive/刷新在 Update 里那条真路径上,
+        //   所以"确认后有没有回到舰队页"要**下一帧**看面板探针(QaFleetPanelState), 这里先给 _fleetOpen。
+        //   招募那两个键还额外报一遍**逐船水手**(补员数字才是这两个键的真凭据, "面板回到舰队页"只说对了一半)。
+        public string QaFleetConfirmFlow(string which)
+        {
+            var sb = new StringBuilder(200);
+            string[] order = which == "all" ? new[] { "crewHalf", "crew", "prov15", "prov30" } : new[] { which };
+            foreach (var k in order)
+            {
+                Button b = k == "prov30" ? _fleetProv30
+                    : k == "crew" ? _fleetRecruit
+                    : k == "crewHalf" ? _fleetRecruitHalf
+                    : _fleetProv15;
+                if (b == null) { sb.Append("flow[").Append(k).Append("] 按钮不在\n"); continue; }
+                _fleetOpen = true;
+                // 半仓补员要两种船同时在队才测得全: 一条**不足半仓**(该被补到半仓)、
+                //   一条**超过半仓**(必须原样不动)。只摆前一种的话, "只补不裁"这半边等于没验。
+                if (k == "crewHalf") MakeCrewSpread();
+                string before = k == "crewHalf" || k == "crew" ? " 船员前[" + CrewSnapshot() + "]" : "";
+                b.onClick.Invoke();                        // ① 点按钮 → 该弹出确认
+                bool dlg = _confirmGo != null && _confirmGo.activeSelf;
+                sb.Append("flow[").Append(k).Append("] 弹确认=").Append(dlg)
+                  .Append("(此时舰队页=").Append(_fleetOpen).Append(')');
+                if (dlg) OnConfirmOk();                    // ② 点「确定」
+                sb.Append(" → 确定后 舰队页=").Append(_fleetOpen)
+                  .Append(" 确认弹窗=").Append(_confirmGo != null && _confirmGo.activeSelf);
+                if (before.Length > 0) sb.Append(before).Append(" → 后[").Append(CrewSnapshot()).Append(']');
+                sb.Append('\n');
+            }
+            return sb.ToString().TrimEnd('\n');
+        }
+
+        // 造出半仓补员的两种样本: 0 号压到最低配员(不足半仓, 该被补到半仓线),
+        //   1 号招到满编(超过半仓, 必须一个不动)。一次调用里两类船同时在队, 逐船判才看得出。
+        void MakeCrewSpread()
+        {
+            var ships = play != null && play.fleet != null ? play.fleet.Ships : null;
+            if (ships == null || ships.Count == 0) return;
+            ships[0].CrewAboard = ships[0].Model.CrewMin;
+            if (ships.Count > 1) ships[1].CrewAboard = ships[1].Model.CrewMax;
+        }
+
+        // 逐船水手: 现员/半仓线/满编。半仓线是 SeaPlay.CrewHalfOf(不是这里另算一遍) —— 报的就是执行时用的那个数。
+        string CrewSnapshot()
+        {
+            var ships = play != null && play.fleet != null ? play.fleet.Ships : null;
+            if (ships == null) return "无船队";
+            var sb = new StringBuilder();
+            foreach (var s in ships)
+            {
+                if (sb.Length > 0) sb.Append(" | ");
+                sb.Append(s.Model.Id).Append(' ').Append(s.CrewAboard)
+                  .Append("/半").Append(SeaPlay.CrewHalfOf(s.Model))
+                  .Append("/满").Append(s.Model.CrewMax);
+            }
+            return sb.ToString();
+        }
+
+        // 舰队面板此刻的**真实**状态, 给截图轮当量尺: 开没开 / 面板多大 / 摆了几张卡 / 是哪个实例。
+        //   为什么连"多大"也要报: 这版改的就是"面板得长到装下 8~10 张卡", 而"够不够长"最容易被
+        //   一句推理糊弄过去("尺寸都算好了") —— 报出来的是运行期 rect, 不是我心算的那个数。
+        //   实例 id 是为了排"截图轮手上的 HUD 和画面上那个不是同一个"这种病(症状: 面板明明开了却看不见)。
+        public string QaFleetPanelState()
+        {
+            var r = _fleetGo != null ? Rt(_fleetGo) : null;
+            return "hud#" + GetInstanceID()
+                 + " fleetOpen=" + _fleetOpen
+                 + " active=" + (_fleetGo != null && _fleetGo.activeSelf)
+                 + " size=" + (r != null ? r.sizeDelta.x.ToString("F0") + "x" + r.sizeDelta.y.ToString("F0") : "-")
+                 + " cards=" + _shipHeads.Count
+                 + " built=" + _built;
+        }
+
         // =============================================================
         // 右下角"舰队货仓"速览: 行情开着时, 买/卖一入账就在这按船画"格子占用"
-        //   —— 每船: 名称(旗舰★) + 货种 k/Slots + 占载 occ/Eff, 下一行格子条(█=已占, ░=空),
-        //      再下一行列出每种货的名称 × 件数(占重)。给养是全队合算, 单列一行注明。
+        //   —— 每船: 名称(旗舰★) + 货种 k/Slots + 占载 occ/Eff, 下一行格子条(█=货, ▓=给养, ░=空),
+        //      再下一行列出每种货的名称 × 件数(占重)。
+        //   给养在模拟层是全队一本账, 这里按"各船空舱"分摊到船后逐船显示(口径见 SeaPlay.ShipProvWeights),
+        //   于是 occ 与格子条都含它 —— 玩家能直接看出"哪艘船的仓位被给养吃掉了多少"。
         // =============================================================
         void BuildHold(Transform root)
         {
@@ -1513,15 +1956,17 @@ namespace Sea
             hr.anchoredPosition = new Vector2(-10f, 126f);   // 日志(y348+)之下、行情表(至x910)右旁的空地
             hr.sizeDelta = new Vector2(360f, 214f);
             AddHead(_holdGo.transform, "舰队货仓");
-            var vpGo = Panel("vp", _holdGo.transform, new Color(0, 0, 0, 0.22f));   // 内深遮罩
-            var vp = Rt(vpGo);
-            vp.anchorMin = new Vector2(0f, 0f); vp.anchorMax = new Vector2(1f, 1f);
-            vp.offsetMin = new Vector2(6f, 6f); vp.offsetMax = new Vector2(-6f, -28f);
-            vpGo.AddComponent<Mask>().showMaskGraphic = false;   // 内容超高就裁掉, 不越界盖日志/码头
-            _holdBody = AddText(vpGo.transform, "", 11, ColTxt, TextAnchor.UpperLeft);
+
+            // 与日志同一套"可滚动"装配: 十艘船的货单在这张 214 高的卡里本来就放不下,
+            //   以前只列 3 艘、剩下的让玩家去舰队页看; 现在滚轮/拖拽能翻, 就全列出来。
+            _holdSc = MakeScroller(hr, "hold", new Vector4(6f, 6f, 20f, 28f));
+
+            // 字号 11 → 10(右侧这两张卡统一小一号, 与日志同理)
+            _holdBody = AddText(_holdSc.Content, "", 10, ColTxt, TextAnchor.UpperLeft);
             var b = Rt(_holdBody.gameObject);
             b.anchorMin = Vector2.zero; b.anchorMax = Vector2.one;
-            b.offsetMin = new Vector2(8f, 8f); b.offsetMax = new Vector2(-8f, -8f);
+            // 右缘收到 -6: 视窗已为滚动条让开 20, 再加 6 = 26, 而轨道只占到距右缘 7..17 → 不叠字
+            b.offsetMin = new Vector2(8f, 8f); b.offsetMax = new Vector2(-6f, -8f);
             _holdBody.horizontalOverflow = HorizontalWrapMode.Wrap;
             _holdBody.verticalOverflow = VerticalWrapMode.Overflow;
             _holdGo.SetActive(false);
@@ -1535,28 +1980,39 @@ namespace Sea
             int cap = Mathf.Max(1, play.TotalCapacity());
             int used = play.CargoWeight() + play.ProvWeight();
             int freeL = Math.Max(0, play.FreeLoad());
+            var prov = play.ShipProvWeights();   // 同上: 各船名下的给养载重
             var sb = new StringBuilder(384);
-            sb.Append("<size=12>货仓合计 <color=#FFD76A>").Append(used).Append("</color>/").Append(cap)
+            sb.Append("<size=11>货仓合计 <color=#FFD76A>").Append(used).Append("</color>/").Append(cap)
               .Append(" 载 · 空 <b>").Append(freeL).Append("</b></size>\n");
             if (play.ProvWeight() > 0)
-                sb.Append("<size=10><color=#8FA8C2>其中给养占 ").Append(play.ProvWeight()).Append(" 载(全队合算, 不分船)</color></size>\n");
-            int maxShow = Mathf.Min(3, ships.Count);
-            for (int i = 0; i < maxShow; i++)
+                sb.Append("<size=9><color=#8FA8C2>其中给养占 ").Append(play.ProvWeight())
+                  .Append(" 载 —— 各船 ▓ 段即该船名下的给养(按空舱分摊)</color></size>\n");
+            // 不再只列 3 艘: 这张卡现在能滚(见 BuildHold → MakeScroller), 十艘全列出来也翻得到,
+            //   没有理由再把玩家赶去舰队页看后几艘。
+            for (int i = 0; i < ships.Count; i++)
             {
                 var s = ships[i];
                 if (i > 0) sb.Append('\n');
-                int occ = ShipWeight(s);
+                int cargoW = ShipWeight(s);
+                int provW = i < prov.Length ? prov[i] : 0;
+                int occ = cargoW + provW;                 // 占 = 货 + 给养(与舰队页船卡同一口径)
                 int ec = Math.Max(1, s.EffCapacity);
-                sb.Append("<size=12>").Append(s.IsFlagship ? "<color=#FFD76A>★</color>" : "<color=#8FA8C2>·</color>")
+                sb.Append("<size=11>").Append(s.IsFlagship ? "<color=#FFD76A>★</color>" : "<color=#8FA8C2>·</color>")
                   .Append(" <b>").Append(ShipShort(s.Model.Name)).Append("</b>")
                   .Append(s.IsFlagship ? " <color=#FFD76A>旗舰</color>" : " <color=#7FA0C0>僚舰</color>")
                   .Append("</size>  货种 <b>").Append(s.Cargo.Count).Append("</b>/").Append(s.Model.Slots)
                   .Append(" · 占 <b>").Append(occ).Append("</b>/").Append(ec).Append('\n');
-                // 格子条: █ 已占载重, ░ 空载重(16 格按占载比例填)
+                // 格子条: █ 货 / ▓ 给养 / ░ 空(16 格按占载比例填) —— 给养那一段单独上色, 一眼能看出
+                //   "这艘船有多少仓位是给养吃掉的"; 只用 █/░ 两色的话给养就被算进货里了, 看不出来。
                 int cells = 16;
-                int filled = Mathf.Clamp((int)Mathf.Ceil((float)occ / ec * cells), 0, cells);
-                sb.Append("<size=10><color=#FFD76A>").Append(new string('█', filled)).Append("</color><color=#3D5568>")
-                  .Append(new string('░', cells - filled)).Append("</color></size>\n");
+                int barCargo = Mathf.Clamp((int)Mathf.Ceil((float)cargoW / ec * cells), 0, cells);
+                int barAll = Mathf.Clamp((int)Mathf.Ceil((float)occ / ec * cells), barCargo, cells);
+                int barProv = barAll - barCargo, barFree = cells - barAll;
+                sb.Append("<size=9><color=#FFD76A>").Append(new string('█', barCargo))
+                  .Append("</color><color=#6FB6E8>").Append(new string('▓', barProv))
+                  .Append("</color><color=#3D5568>").Append(new string('░', barFree))
+                  .Append("</color>  <color=#8FA8C2>货 ").Append(cargoW).Append(" · 给养 ").Append(provW)
+                  .Append("</color></size>\n");
                 // 货名清单: 名称 × 件数(占重); 最多列 6 种, 其余省略
                 if (s.Cargo.Count == 0)
                 {
@@ -1579,9 +2035,12 @@ namespace Sea
                     sb.Append("</color>");
                 }
             }
-            if (ships.Count > maxShow)
-                sb.Append("\n<size=10><color=#8FA8C2>…其余 ").Append(ships.Count - maxShow).Append(" 艘见 ⚓舰队</color></size>");
             _holdBody.text = sb.ToString();
+            // content 必须跟着文字一起长 —— 否则滚动量还按上一次的高度算, 后几艘就滚不到底。
+            //   首帧量 preferredHeight 时可能还没拿到正确宽度(会量出个偏大的值), 但本方法每帧都跑,
+            //   下一帧就正过来了, 不必专门 ForceUpdateCanvases。
+            _holdSc.Content.sizeDelta = new Vector2(0f, Mathf.Max(40f, _holdBody.preferredHeight + 16f));
+            UpdateThumb(_holdSc);
         }
 
         // 船名取主名(遇 "A·B" 取 A), 右栏速览里省地方
@@ -1679,17 +2138,44 @@ namespace Sea
             //   少了 ②,"存一份在母港的档再读回来"这条路上手里的货永远排不到最上面。
             if (docked && (curIdNow != _lastPort || play.VoyageSerial != _lastVoyage))
             {
-                _tradeOpen = true; _fleetOpen = false; _yardOpen = false; _newsOpen = false;
+                // 这一跳里"排一次序"和"弹一次行情"是**两件事**, 分开判 —— 它俩曾经被绑在一起, 于是
+                //   开局/读档也被当成"到港"把行情弹了出来: 玩家刚进游戏、正要点第一座城, 整个海图
+                //   输入却被这层浮层锁着(AnyTopOpen → HandleCamAndPick 早退), 而且**一点反馈都没有**,
+                //   表现就是"点城要点好几次才选中"。排序要, 弹窗不要。
+                bool newPort = curIdNow != _lastPort;                   // ① 海上驶到一港:
+                bool voyageEdge = play.VoyageSerial != _lastVoyage;     // ② 开局 / 读档(港没变)
+                _fleetOpen = false; _yardOpen = false; _newsOpen = false;
                 SortMarketRows();   // 进港排一次: 手里有货的置顶, 之后整个停靠期间钉住不重排
+                // 只有**真换了港**才自动弹; 开局/读档一律不弹(读档落在别的港也算读档: 玩家的下一动
+                //   是点目的地, 不是看行情; 真想看随时点「本港行情」)。
+                _tradeOpen = !voyageEdge && newPort;
+                // [闸门] 把"这一刻真路径把面板开成了什么样"钉下来。为什么非得钉一份而不是到截图时再看:
+                //   截图闸门每帧都在替玩家收浮层(QaClosePanels), 直接读当场状态永远是"收好了" ——
+                //   量到的是闸门自己干的活, 不是玩家真走的这条路。
+                //   这里量的是病灶本身: 开局/读档也是"一次进港", 于是自动弹行情把海图输入整个吃掉
+                //   (AnyTopOpen → HandleCamAndPick 早退), 玩家点第一座城点不动就是这个。
+                _qaVoyageEdge = "第" + (++_qaVoyageEdges) + "次 " + (voyageEdge ? "开局/读档" : "换港")
+                    + "边沿(港=" + curIdNow + ") → 排序✓ 弹行情=" + _tradeOpen
+                    + " [fleet=" + _fleetOpen + " news=" + _newsOpen + " yard=" + _yardOpen + "]";
             }
             _lastPort = curIdNow;
             _lastVoyage = play.VoyageSerial;
             _fleetGo.SetActive(_fleetOpen);
             if (_fleetOpen) RefreshFleet();
+            // 面板顶缘(宽体能装 10 艘卡的必然)伸进了左上题名那块地界 —— 开着时让题名先让位。
+            //   不让的话: 题名是**最后挂**的、永远在最上层, 于是它正好压在 1 号船卡的船图上,
+            //   看起来像贴错位置的贴纸。收起来再放回去, 别的一概不动(行情表够不着题名, 不用管)。
+            if (_logoGo != null && _logoGo.activeSelf == _fleetOpen) _logoGo.SetActive(!_fleetOpen);
 
             // --- 行情 ---
+            // 开铺就回到数据第一行。三条开铺的路(点「本港行情」/ 进港自动弹 / QA 钩子)在这里收口:
+            //   面板每帧被 SetActive 一次, 于是"上一帧开着没有"就是那条**闭→开**的边沿, 不必在三个
+            //   调用点各写一遍(将来再多一条开铺的路, 这里自动也管)。面板在航行中被 SetActive(false)、
+            //   到港再开, 同样算一次闭→开 —— 换港后回到第一行也正是要的。
+            bool tradeWasOn = _tradeGo.activeSelf;
             _tradeGo.SetActive(docked && _tradeOpen);
             if (docked && _tradeOpen) RefreshTrade();
+            if (docked && _tradeOpen && !tradeWasOn) ScrollMarketTop();
 
             // --- 船坞(浮层; 靠港才能买/卖/改装) ---
             if (_yardGo != null)
@@ -1707,8 +2193,14 @@ namespace Sea
             }
 
             // --- 右下角货仓速览: 行情开着时按船画格子占用(买/卖入账后下一帧即刷新) ---
+            bool holdWasOn = _holdGo != null && _holdGo.activeSelf;
             if (_holdGo != null) _holdGo.SetActive(docked && _tradeOpen);
             if (docked && _tradeOpen && _holdBody != null) RefreshHold();
+            // 刚开铺那一下把它卷回**顶上**(合计那一段): 这张卡现在能滚, 不收一下就会停在
+            //   上次翻到的地方 —— 玩家一开行情看到的是半截船名, 找不到"货仓合计"。
+            //   (与行情表开铺回第一行同一条道理, 见 ScrollMarketTop。)
+            if (docked && _tradeOpen && !holdWasOn && _holdSc != null)
+                _holdSc.Scroll.verticalNormalizedPosition = 1f;
 
             // --- 出航前检查(顶层浮层; 一旦起航/换状态即收起) ---
             if (sailing) _departOpen = false;
@@ -1859,11 +2351,22 @@ namespace Sea
                     for (int s = 0; s < _sell[i].Length; s++)
                     {
                         _sell[i][s].interactable = canSell;
-                        // 没持仓的货: 卖出键不只置灰底, 键字也转暗淡 —— 不再一片亮白诱人误点
+                        // 键底色: 手里有这件货 → **金黄**(买入键原来那个黄: 意思变成"这一行有东西可卖");
+                        //   没货 → 青底(与底栏动作键同色)。黄 = 能动手, 于是整张表一眼扫出"哪几行是我的货"——
+                        //   而排序恰好把手里有货的顶到最上面几行, 两者指同一批行, 不打架。
+                        //   (金黄与 interactable 是同一个条件, 所以不会出现"金黄的灰键"那种读不清的搭配。)
+                        var im = (i < _sellImg.Count && s < _sellImg[i].Length) ? _sellImg[i][s] : null;
+                        if (im != null)
+                        {
+                            Color wantFill = canSell ? ColGoldBtn : ColBtn;
+                            if (im.color != wantFill) im.color = wantFill;
+                        }
+                        // 没持仓的货: 卖出键不只置灰底, 键字也转暗淡 —— 不再一片亮白诱人误点。
+                        //   有货时键字转**深褐**(金底上再放白字会糊成一片, 这正是买入键原来的配色)。
                         var lb = (i < _sellLbl.Count && s < _sellLbl[i].Length) ? _sellLbl[i][s] : null;
                         if (lb != null)
                         {
-                            Color want = canSell ? Color.white : new Color(0.45f, 0.52f, 0.60f, 0.85f);
+                            Color want = canSell ? new Color(0.15f, 0.09f, 0.04f) : new Color(0.45f, 0.52f, 0.60f, 0.85f);
                             if (lb.color != want) lb.color = want;
                         }
                     }
